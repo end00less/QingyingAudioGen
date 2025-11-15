@@ -8,9 +8,12 @@ from app.controllers.base_controller import BusinessException
 class MainWindow:
     def __init__(self, root):
         self.root = root
+        self.root.title("清影配音软件 v1.0")
+        self.root.geometry("1200x800")
+
         self.app_controller = AppContext.get_instance()
         self.current_project = None  # 添加当前项目状态
-
+        self.current_main_module = None  # 当前主模块：'dubbing' 或 'settings'
         self.setup_ui()
         self.load_projects()
 
