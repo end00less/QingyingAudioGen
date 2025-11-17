@@ -3,6 +3,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 from app.core.app_context import AppContext
 from app.controllers.base_controller import BusinessException
+from app.ui.chapter_editor import ChapterEditor
 
 
 class MainWindow:
@@ -14,208 +15,408 @@ class MainWindow:
         self.app_controller = AppContext.get_instance()
         self.current_project = None  # 添加当前项目状态
         self.current_main_module = None  # 当前主模块：'dubbing' 或 'settings'
+
         self.setup_ui()
         self.load_projects()
+        self.is_debug = True
 
     def setup_ui(self):
-        # 主框架
+        # 创建主框架
         main_frame = ttk.Frame(self.root, padding="10")
-        main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        main_frame.pack(fill=tk.BOTH, expand=True)
 
-        # 标题
-        title_label = ttk.Label(main_frame, text="SonicVale 配音软件", style='Title.TLabel')
-        title_label.grid(row=0, column=0, columnspan=2, pady=(0, 20))
+        # 创建顶部主功能区
+        self.create_main_toolbar(main_frame)
 
-        # 项目列表框架
-        list_frame = ttk.LabelFrame(main_frame, text="项目列表", padding="10")
-        list_frame.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=(0, 10))
+        # 创建主内容区域
+        self.create_main_content(main_frame)
 
-        # 项目列表
-        self.project_listbox = tk.Listbox(list_frame, width=40, height=20)
-        self.project_listbox.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        self.project_listbox.bind('<<ListboxSelect>>', self.on_project_select)
+        # 创建底部状态栏
+        self.create_status_bar(main_frame)
+
+    def create_main_toolbar(self, parent):
+        """创建顶部主功能区"""
+        toolbar_frame = ttk.LabelFrame(parent, text="主功能区", padding="10")
+        toolbar_frame.pack(fill=tk.X, pady=(0, 10))
+
+        # 主功能按钮
+        main_functions = [
+            ("🎤 配音模块", "dubbing", self.show_dubbing_module),
+            ("⚙️ 设置模块", "settings", self.show_settings_module),
+        ]
+
+        for i, (text, module_id, command) in enumerate(main_functions):
+            btn = ttk.Button(toolbar_frame, text=text, command=command, width=15)
+            btn.pack(side=tk.LEFT, padx=5)
 
         # 项目操作按钮
-        btn_frame = ttk.Frame(list_frame)
-        btn_frame.grid(row=1, column=0, pady=(10, 0))
+        ttk.Separator(toolbar_frame, orient=tk.VERTICAL).pack(side=tk.LEFT, padx=10, fill=tk.Y)
 
-        ttk.Button(btn_frame, text="新建项目", command=self.create_project).pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Button(btn_frame, text="编辑项目", command=self.edit_project).pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Button(btn_frame, text="删除项目", command=self.delete_project).pack(side=tk.LEFT)
+        ttk.Button(toolbar_frame, text="新建项目", command=self.new_project).pack(side=tk.LEFT, padx=2)
+        ttk.Button(toolbar_frame, text="打开项目", command=self.open_project).pack(side=tk.LEFT, padx=2)
+        ttk.Button(toolbar_frame, text="保存项目", command=self.save_project).pack(side=tk.LEFT, padx=2)
 
-        # 项目详情框架
-        detail_frame = ttk.LabelFrame(main_frame, text="项目详情", padding="10")
-        detail_frame.grid(row=1, column=1, sticky=(tk.W, tk.E, tk.N, tk.S))
+        # 项目信息显示在右侧
+        info_frame = ttk.Frame(toolbar_frame)
+        info_frame.pack(side=tk.RIGHT, padx=10)
 
-        # 项目详情内容
-        self.detail_text = tk.Text(detail_frame, width=60, height=20, state=tk.DISABLED)
-        self.detail_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        self.project_name_var = tk.StringVar(value="无项目")
+        ttk.Label(info_frame, text="项目:", font=("Arial", 9)).pack(side=tk.LEFT)
+        ttk.Label(info_frame, textvariable=self.project_name_var,
+                  foreground="blue", font=("Arial", 9, "bold")).pack(side=tk.LEFT, padx=(2, 10))
 
-        # 章节管理按钮
-        chapter_btn_frame = ttk.Frame(detail_frame)
-        chapter_btn_frame.grid(row=1, column=0, pady=(10, 0))
+        self.chapter_count_var = tk.StringVar(value="章节:0")
+        ttk.Label(info_frame, textvariable=self.chapter_count_var, font=("Arial", 9)).pack(side=tk.LEFT, padx=5)
 
-        ttk.Button(chapter_btn_frame, text="管理章节", command=self.manage_chapters).pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Button(chapter_btn_frame, text="生成配音", command=self.generate_audio).pack(side=tk.LEFT)
+        self.character_count_var = tk.StringVar(value="角色:0")
+        ttk.Label(info_frame, textvariable=self.character_count_var, font=("Arial", 9)).pack(side=tk.LEFT, padx=5)
 
-        # 配置行列权重
-        main_frame.columnconfigure(1, weight=1)
-        main_frame.rowconfigure(1, weight=1)
-        list_frame.rowconfigure(0, weight=1)
-        list_frame.columnconfigure(0, weight=1)
-        detail_frame.rowconfigure(0, weight=1)
-        detail_frame.columnconfigure(0, weight=1)
+    def create_main_content(self, parent):
+        """创建主内容区域"""
+        content_frame = ttk.Frame(parent)
+        content_frame.pack(fill=tk.BOTH, expand=True)
+
+        # 初始显示欢迎页面
+        self.welcome_frame = ttk.Frame(content_frame)
+        self.welcome_frame.pack(fill=tk.BOTH, expand=True)
+
+        self.show_welcome_page()
+
+        # 模块容器（初始隐藏）
+        self.module_container = ttk.Frame(content_frame)
+
+    def show_welcome_page(self):
+        """显示欢迎页面"""
+        # 清空欢迎页面
+        for widget in self.welcome_frame.winfo_children():
+            widget.destroy()
+
+        # 标题
+        title_label = ttk.Label(
+            self.welcome_frame,
+            text="🎵 音频制作工具",
+            font=("Arial", 24, "bold")
+        )
+        title_label.pack(pady=(50, 10))
+
+        subtitle_label = ttk.Label(
+            self.welcome_frame,
+            text="专业音频制作与角色推理平台",
+            font=("Arial", 14)
+        )
+        subtitle_label.pack(pady=(0, 30))
+
+        # 操作按钮
+        button_frame = ttk.Frame(self.welcome_frame)
+        button_frame.pack(pady=20)
+
+        # ttk.Button(
+        #     button_frame,
+        #     text="新建项目",
+        #     command=self.new_project,
+        #     width=20
+        # ).pack(pady=5)
+        #
+        # ttk.Button(
+        #     button_frame,
+        #     text="打开项目",
+        #     command=self.open_project,
+        #     width=20
+        # ).pack(pady=5)
+
+        # 使用说明
+        help_frame = ttk.LabelFrame(self.welcome_frame, text="使用说明", padding="20")
+        help_frame.pack(pady=30, padx=100, fill=tk.X)
+
+        help_text = """1. 新建项目：创建一个新的配音项目
+2. 打开项目：打开已有的配音项目
+3. 配音模块：管理章节、角色和台词
+4. 设置模块：配置项目参数和音频设置"""
+
+        help_label = ttk.Label(help_frame, text=help_text, justify=tk.LEFT)
+        help_label.pack()
+
+    def create_module_tabs(self, module_type):
+        """创建模块标签页"""
+        # 隐藏欢迎页面，显示模块容器
+        self.welcome_frame.pack_forget()
+        self.module_container.pack(fill=tk.BOTH, expand=True)
+
+        # 清除现有的标签页
+        for widget in self.module_container.winfo_children():
+            widget.destroy()
+
+        if module_type == "dubbing":
+            # 配音模块的标签页
+            self.create_dubbing_tabs()
+        elif module_type == "settings":
+            # 设置模块的标签页
+            self.create_settings_tabs()
+
+    def create_dubbing_tabs(self):
+        """创建配音模块的标签页"""
+        # 标签页控件
+        self.dubbing_notebook = ttk.Notebook(self.module_container)
+        self.dubbing_notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        # 创建各个配音功能标签页（先创建空框架）
+        self.chapter_frame = ttk.Frame(self.dubbing_notebook)
+        self.role_frame = ttk.Frame(self.dubbing_notebook)
+        self.audio_frame = ttk.Frame(self.dubbing_notebook)
+
+        self.dubbing_notebook.add(self.chapter_frame, text="📝 章节编辑")
+        self.dubbing_notebook.add(self.role_frame, text="🎭 角色推理")
+        self.dubbing_notebook.add(self.audio_frame, text="🎵 音频生成")
+
+        # 绑定标签页切换事件
+        self.dubbing_notebook.bind("<<NotebookTabChanged>>", self.on_dubbing_tab_changed)
+
+    def on_dubbing_tab_changed(self, event):
+        """配音模块标签页切换事件"""
+        if not self.current_project:
+            return
+
+        current_tab = self.dubbing_notebook.index(self.dubbing_notebook.select())
+
+        if current_tab == 0:  # 章节编辑标签页
+            self.setup_chapter_editor()
+        elif current_tab == 1:  # 角色推理标签页
+            self.setup_role_reasoning()
+        elif current_tab == 2:  # 音频生成标签页
+            self.setup_audio_generation()
+
+    def setup_chapter_editor(self):
+        """设置章节编辑器（延迟加载）"""
+        # 如果已经创建过，就不再重复创建
+        if hasattr(self, 'chapter_editor_created') and self.chapter_editor_created:
+            return
+
+        # 清除现有内容
+        for widget in self.chapter_frame.winfo_children():
+            widget.destroy()
+
+        if not self.current_project:
+            # 如果没有项目，显示提示
+            ttk.Label(
+                self.chapter_frame,
+                text="请先创建或打开一个项目",
+                font=("Arial", 12)
+            ).pack(expand=True, pady=50)
+            return
+
+        # 创建章节管理界面
+        self.chapter_editor = ChapterEditor(self.chapter_frame, self.current_project, self.app_controller)
+        self.chapter_editor.pack(fill=tk.BOTH, expand=True)
+        self.chapter_editor_created = True
+
+    def setup_role_reasoning(self):
+        """设置角色推理界面（延迟加载）"""
+        # 清除现有内容
+        for widget in self.role_frame.winfo_children():
+            widget.destroy()
+
+        if not self.current_project:
+            ttk.Label(
+                self.role_frame,
+                text="请先创建或打开一个项目",
+                font=("Arial", 12)
+            ).pack(expand=True, pady=50)
+            return
+
+        # 这里可以添加角色推理界面的初始化代码
+        ttk.Label(
+            self.role_frame,
+            text="角色推理功能开发中...",
+            font=("Arial", 12)
+        ).pack(expand=True, pady=50)
+
+    def setup_audio_generation(self):
+        """设置音频生成界面（延迟加载）"""
+        # 清除现有内容
+        for widget in self.audio_frame.winfo_children():
+            widget.destroy()
+
+        if not self.current_project:
+            ttk.Label(
+                self.audio_frame,
+                text="请先创建或打开一个项目",
+                font=("Arial", 12)
+            ).pack(expand=True, pady=50)
+            return
+
+        # 这里可以添加音频生成界面的初始化代码
+        ttk.Label(
+            self.audio_frame,
+            text="音频生成功能开发中...",
+            font=("Arial", 12)
+        ).pack(expand=True, pady=50)
+
+    def create_settings_tabs(self):
+        """创建设置模块的标签页"""
+        # 标签页控件
+        self.settings_notebook = ttk.Notebook(self.module_container)
+        self.settings_notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        # 编辑模式标签页
+        self.editor_frame = ttk.Frame(self.settings_notebook)
+        self.settings_notebook.add(self.editor_frame, text="✏️ 编辑模式")
+
+        # 项目设置标签页
+        self.project_settings_frame = ttk.Frame(self.settings_notebook)
+        self.settings_notebook.add(self.project_settings_frame, text="⚙️ 项目设置")
+
+        # 初始化编辑模式界面
+        from app.ui.text_editor import TextEditor
+        self.text_editor = TextEditor(self.editor_frame, self.current_project)
+        self.text_editor.pack(fill=tk.BOTH, expand=True)
+
+        # 项目设置内容
+        self.setup_project_settings()
+
+    def setup_project_settings(self):
+        """设置项目设置页面内容"""
+        # 清除现有内容
+        for widget in self.project_settings_frame.winfo_children():
+            widget.destroy()
+
+        # 项目设置内容
+        ttk.Label(self.project_settings_frame, text="项目设置",
+                  font=("Arial", 16, "bold")).pack(anchor=tk.W, pady=(0, 20))
+
+        # 项目基本信息
+        info_frame = ttk.LabelFrame(self.project_settings_frame, text="项目信息", padding="10")
+        info_frame.pack(fill=tk.X, pady=10)
+
+        if self.current_project:
+            info = self.current_project.get_project_info()
+            ttk.Label(info_frame, text=f"项目名称: {info['name']}").pack(anchor=tk.W)
+            ttk.Label(info_frame, text=f"文件路径: {info['path']}").pack(anchor=tk.W)
+            ttk.Label(info_frame, text=f"创建时间: {info['created']}").pack(anchor=tk.W)
+            ttk.Label(info_frame, text=f"修改时间: {info['modified']}").pack(anchor=tk.W)
+
+        # 音频设置
+        audio_frame = ttk.LabelFrame(self.project_settings_frame, text="音频设置", padding="10")
+        audio_frame.pack(fill=tk.X, pady=10)
+
+        ttk.Label(audio_frame, text="默认输出格式:").pack(anchor=tk.W)
+        format_combo = ttk.Combobox(audio_frame, values=["MP3", "WAV", "FLAC"], state="readonly")
+        format_combo.set("MP3")
+        format_combo.pack(anchor=tk.W, pady=5)
+
+        ttk.Label(audio_frame, text="默认采样率:").pack(anchor=tk.W)
+        rate_combo = ttk.Combobox(audio_frame, values=["22050", "44100", "48000"], state="readonly")
+        rate_combo.set("44100")
+        rate_combo.pack(anchor=tk.W, pady=5)
+
+    def create_status_bar(self, parent):
+        """创建底部状态栏"""
+        status_frame = ttk.Frame(parent, relief=tk.SUNKEN, padding="2")
+        status_frame.pack(fill=tk.X, side=tk.BOTTOM)
+
+        self.status_var = tk.StringVar(value="就绪")
+        status_label = ttk.Label(status_frame, textvariable=self.status_var, anchor=tk.W)
+        status_label.pack(fill=tk.X)
+
+    def show_dubbing_module(self):
+        """显示配音模块"""
+        self.current_main_module = 'dubbing'
+        self.create_module_tabs('dubbing')
+
+        # 默认显示第一个标签页（章节编辑）
+        if hasattr(self, 'dubbing_notebook'):
+            self.dubbing_notebook.select(0)
+            self.on_dubbing_tab_changed(None)
+
+    def show_settings_module(self):
+        """显示设置模块"""
+        self.current_main_module = 'settings'
+        self.create_module_tabs('settings')
+
+    def new_project(self):
+        """新建项目"""
+        try:
+            from app.ui.project_window import ProjectDialog
+            dialog = ProjectDialog(self.root, self.app_controller.project_controller)
+            self.root.wait_window(dialog.dialog)
+            if dialog.result:
+                self.current_project = dialog.result
+                self.update_project_info()
+                if self.is_debug:
+                    print(self.current_project)
+        except Exception as e:
+            messagebox.showerror("错误", f"新建项目失败: {str(e)}")
+
+    def open_project(self):
+        """打开项目"""
+        try:
+            from app.ui.project_selection_dialog import ProjectSelectionDialog
+
+            # 创建项目选择对话框
+            dialog = ProjectSelectionDialog(self.root, self.app_controller.project_controller)
+            self.root.wait_window(dialog.dialog)
+
+            if dialog.selected_project:
+                self.current_project = dialog.selected_project
+                self.update_project_info()
+
+
+                # 显示成功消息
+                messagebox.showinfo("成功", f"已打开项目: {self.current_project.name}")
+
+                # 如果有模块已经打开，刷新模块内容
+                if self.current_main_module:
+                    self.create_module_tabs(self.current_main_module)
+
+            if self.is_debug:
+                print(self.current_project)
+
+        except Exception as e:
+            messagebox.showerror("错误", f"打开项目失败: {str(e)}")
+
+    def save_project(self):
+        """保存项目"""
+        try:
+            # 这里实现保存项目的逻辑
+            messagebox.showinfo("提示", "保存项目功能待实现")
+        except Exception as e:
+            messagebox.showerror("错误", f"保存项目失败: {str(e)}")
+
+    def update_project_info(self):
+        """更新项目信息显示"""
+        if self.current_project:
+            self.project_name_var.set(self.current_project.name)
+
+            # 更新章节数和角色数（需要从数据库查询）
+            try:
+                chapter_count = self.app_controller.chapter_controller.get_chapter_count(self.current_project.id)
+                character_count = self.app_controller.character_controller.get_character_count(self.current_project.id)
+
+                self.chapter_count_var.set(f"章节:{chapter_count}")
+                self.character_count_var.set(f"角色:{character_count}")
+            except:
+                # 如果查询失败，显示默认值
+                self.chapter_count_var.set("章节:0")
+                self.character_count_var.set("角色:0")
+
+            # 如果当前在配音模块，刷新标签页内容
+            if self.current_main_module == 'dubbing' and hasattr(self, 'dubbing_notebook'):
+                current_tab = self.dubbing_notebook.index(self.dubbing_notebook.select())
+                if current_tab == 0:  # 章节编辑标签页
+                    # 重置章节编辑器创建状态，强制重新创建
+                    if hasattr(self, 'chapter_editor_created'):
+                        delattr(self, 'chapter_editor_created')
+                    self.setup_chapter_editor()
+        else:
+            self.project_name_var.set("无项目")
+            self.chapter_count_var.set("章节:0")
+            self.character_count_var.set("角色:0")
 
     def load_projects(self):
-        """通过 Controller 加载项目"""
+        """加载项目列表"""
         try:
             projects = self.app_controller.project_controller.get_all_projects()
-            self.project_listbox.delete(0, tk.END)
-            for project in projects:
-                self.project_listbox.insert(tk.END, project.name)
+            # 更新项目列表显示
         except BusinessException as e:
             messagebox.showerror("错误", e.message)
         except Exception as e:
-            messagebox.showerror("错误", f"系统错误: {str(e)}")
-
-    def on_project_select(self, event):
-        """当项目列表选择改变时显示项目详情"""
-        selection = self.project_listbox.curselection()
-        if not selection:
-            return
-
-        project_name = self.project_listbox.get(selection[0])
-        try:
-            projects = self.app_controller.project_controller.get_all_projects()
-            project = next((p for p in projects if p.name == project_name), None)
-
-            if project:
-                self.current_project = project  # 更新当前项目
-                self.show_project_details(project)
-        except BusinessException as e:
-            messagebox.showerror("错误", e.message)
-
-    def create_project(self):
-        """通过 Controller 创建项目"""
-        from app.ui.project_window import ProjectDialog
-        dialog = ProjectDialog(self.root, self.app_controller.project_controller)
-
-        # 等待对话框关闭
-        self.root.wait_window(dialog.dialog)
-
-        if dialog.result:  # 这里 dialog.result 就是 Project Entity 对象
-            # 刷新项目列表
-            self.load_projects()
-
-            # 自动选中新建的项目
-            self.select_project_by_id(dialog.result.id)
-
-            # 设置当前项目
-            self.current_project = dialog.result
-
-            print(f"新建项目成功，项目ID: {dialog.result.id}, 名称: {dialog.result.name}")
-
-    def edit_project(self):
-        """通过 Controller 编辑项目"""
-        selection = self.project_listbox.curselection()
-        if not selection:
-            messagebox.showwarning("警告", "请先选择一个项目")
-            return
-
-        project_name = self.project_listbox.get(selection[0])
-        try:
-            # 通过名称查找项目
-            projects = self.app_controller.project_controller.get_all_projects()
-            project = next((p for p in projects if p.name == project_name), None)
-
-            if project:
-                from app.ui.project_window import ProjectDialog
-                dialog = ProjectDialog(self.root, self.app_controller.project_controller, project)
-                if dialog.result:
-                    self.load_projects()
-        except BusinessException as e:
-            messagebox.showerror("错误", e.message)
-
-    def delete_project(self):
-        """通过 Controller 删除项目"""
-        selection = self.project_listbox.curselection()
-        if not selection:
-            return
-
-        project_name = self.project_listbox.get(selection[0])
-
-        try:
-            projects = self.app_controller.project_controller.get_all_projects()
-            project = next((p for p in projects if p.name == project_name), None)
-
-            if project and messagebox.askyesno("确认删除", f"确定要删除项目 '{project_name}' 吗？"):
-                self.app_controller.project_controller.delete_project(project.id)
-                messagebox.showinfo("成功", "项目删除成功")
-                self.load_projects()
-        except BusinessException as e:
-            messagebox.showerror("错误", e.message)
-
-    def manage_chapters(self):
-        """通过 Controller 管理章节"""
-        selection = self.project_listbox.curselection()
-        if not selection:
-            messagebox.showwarning("警告", "请先选择一个项目")
-            return
-
-        project_name = self.project_listbox.get(selection[0])
-        try:
-            projects = self.app_controller.project_controller.get_all_projects()
-            project = next((p for p in projects if p.name == project_name), None)
-
-            if project:
-                from app.ui.chapter_window import ChapterWindow
-                chapter_window = ChapterWindow(self.root, project, self.app_controller)
-        except BusinessException as e:
-            messagebox.showerror("错误", e.message)
-
-    def generate_audio(self):
-        """生成项目配音"""
-        selection = self.project_listbox.curselection()
-        if not selection:
-            messagebox.showwarning("警告", "请先选择一个项目")
-            return
-
-        project_name = self.project_listbox.get(selection[0])
-        try:
-            # 通过名称查找项目
-            projects = self.app_controller.project_controller.get_all_projects()
-            project = next((p for p in projects if p.name == project_name), None)
-
-            if project:
-                # 确认生成
-                if not messagebox.askyesno("确认生成", f"确定要为项目 '{project_name}' 生成配音吗？"):
-                    return
-
-                # 调用控制器生成配音
-                result = self.app_controller.audio_generation_controller.generate_project_audio(project.id)
-
-                if result.success:
-                    messagebox.showinfo("成功", f"配音生成完成！\n生成文件数量: {result.generated_files}\n保存路径: {result.output_path}")
-                else:
-                    messagebox.showerror("生成失败", f"配音生成过程中出现错误: {result.error_message}")
-
-        except BusinessException as e:
-            messagebox.showerror("错误", e.message)
-        except Exception as e:
-            messagebox.showerror("错误", f"系统错误: {str(e)}")
-
-    def show_project_details(self, project):
-        """显示项目详情"""
-        self.detail_text.config(state=tk.NORMAL)
-        self.detail_text.delete(1.0, tk.END)
-
-        details = f"""项目名称: {project.name}
-描述: {project.description or '无'}
-LLM模型: {project.llm_model or '未设置'}
-TTS服务: {project.tts_provider_id or '未设置'}
-精准填充: {'是' if project.is_precise_fill else '否'}
-项目路径: {project.project_root_path or '未设置'}
-创建时间: {project.created_at}
-"""
-        self.detail_text.insert(1.0, details)
-        self.detail_text.config(state=tk.DISABLED)
+            messagebox.showerror("错误", f"加载项目失败: {str(e)}")
