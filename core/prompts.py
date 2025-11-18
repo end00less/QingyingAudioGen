@@ -3,8 +3,7 @@
 import textwrap
 
 
-def get_context2lines_prompt(possible_characters, novel_content,possible_emotions,possible_strengths) -> str:
-
+def get_context2lines_prompt(possible_characters, novel_content, possible_emotions, possible_strengths) -> str:
     prompt = f"""
 你的任务是将给定小说内容划分为角色台词和旁白，并输出包含<result>标签的结构化JSON结果。
 
@@ -72,6 +71,7 @@ def get_context2lines_prompt(possible_characters, novel_content,possible_emotion
 """
     return textwrap.dedent(prompt)
 
+
 def get_prompt_str():
     prompt = """
     你的任务是将给定小说内容划分为角色和内容，并输出为结构化JSON结果。
@@ -138,8 +138,6 @@ def get_prompt_str():
 
     """
     return textwrap.dedent(prompt)
-
-
 
 
 def get_auto_fix_json_prompt(json_str: str) -> str:

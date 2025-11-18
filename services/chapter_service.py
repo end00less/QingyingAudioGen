@@ -179,6 +179,7 @@ class ChapterService:
     #         组装prompt
     #         prompt = get_context2lines_prompt(role_names, content,emotion_names,strength_names)
             prompt = self.fill_prompt(prompt, role_names, emotion_names, strength_names, content)
+            print(prompt)
 
         #   获取llm_provider
 

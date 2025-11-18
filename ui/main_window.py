@@ -165,7 +165,7 @@ class MainWindow:
         self.audio_frame = ttk.Frame(self.dubbing_notebook)
 
         self.dubbing_notebook.add(self.chapter_frame, text="📝 章节编辑")
-        self.dubbing_notebook.add(self.role_frame, text="🎭 角色推理")
+        self.dubbing_notebook.add(self.role_frame, text="🎭 角色库")
         self.dubbing_notebook.add(self.audio_frame, text="🎵 音频生成")
 
         # 绑定标签页切换事件
@@ -181,16 +181,14 @@ class MainWindow:
         if current_tab == 0:  # 章节编辑标签页
             self.setup_chapter_editor()
         elif current_tab == 1:  # 角色推理标签页
-            self.setup_role_reasoning()
+            self.setup_role_library()
         elif current_tab == 2:  # 音频生成标签页
             self.setup_audio_generation()
 
     def setup_chapter_editor(self):
         """设置章节编辑器（延迟加载）"""
-        # 如果已经创建过，就不再重复创建
-        if hasattr(self, 'chapter_editor_created') and self.chapter_editor_created:
-            return
-
+        if self.is_debug:
+            print("setup_chapter_editor called")  # 调试用
         # 清除现有内容
         for widget in self.chapter_frame.winfo_children():
             widget.destroy()
@@ -209,8 +207,8 @@ class MainWindow:
         self.chapter_editor.pack(fill=tk.BOTH, expand=True)
         self.chapter_editor_created = True
 
-    def setup_role_reasoning(self):
-        """设置角色推理界面（延迟加载）"""
+    def setup_role_library(self):
+        """设置角色库界面（延迟加载）"""  # 修改方法名和注释
         # 清除现有内容
         for widget in self.role_frame.winfo_children():
             widget.destroy()
@@ -223,12 +221,10 @@ class MainWindow:
             ).pack(expand=True, pady=50)
             return
 
-        # 这里可以添加角色推理界面的初始化代码
-        ttk.Label(
-            self.role_frame,
-            text="角色推理功能开发中...",
-            font=("Arial", 12)
-        ).pack(expand=True, pady=50)
+        # 创建角色库界面
+        from app.ui.role_editor import RoleEditor
+        self.role_editor = RoleEditor(self.role_frame, self.current_project, self.app_controller)
+        self.role_editor.pack(fill=tk.BOTH, expand=True)
 
     def setup_audio_generation(self):
         """设置音频生成界面（延迟加载）"""
@@ -257,21 +253,20 @@ class MainWindow:
         self.settings_notebook = ttk.Notebook(self.module_container)
         self.settings_notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
-        # 编辑模式标签页
-        self.editor_frame = ttk.Frame(self.settings_notebook)
-        self.settings_notebook.add(self.editor_frame, text="✏️ 编辑模式")
-
         # 项目设置标签页
         self.project_settings_frame = ttk.Frame(self.settings_notebook)
         self.settings_notebook.add(self.project_settings_frame, text="⚙️ 项目设置")
 
-        # 初始化编辑模式界面
-        from app.ui.text_editor import TextEditor
-        self.text_editor = TextEditor(self.editor_frame, self.current_project)
-        self.text_editor.pack(fill=tk.BOTH, expand=True)
+        # LLM配置标签页
+        self.llm_settings_frame = ttk.Frame(self.settings_notebook)
+        self.settings_notebook.add(self.llm_settings_frame, text="🤖 LLM配置")
 
         # 项目设置内容
-        self.setup_project_settings()
+        # self.setup_project_settings()
+
+        # LLM配置内容
+        self.setup_llm_settings()
+
 
     def setup_project_settings(self):
         """设置项目设置页面内容"""
@@ -308,6 +303,19 @@ class MainWindow:
         rate_combo.set("44100")
         rate_combo.pack(anchor=tk.W, pady=5)
 
+    def setup_llm_settings(self):
+        """设置LLM配置页面"""
+        # 导入LLM设置界面
+        from app.ui.llm_settings_frame import LLMSettingsFrame
+
+        # 创建LLM设置界面
+        self.llm_settings = LLMSettingsFrame(
+            self.llm_settings_frame,
+            self.current_project,
+            self.app_controller
+        )
+        self.llm_settings.pack(fill=tk.BOTH, expand=True)
+
     def create_status_bar(self, parent):
         """创建底部状态栏"""
         status_frame = ttk.Frame(parent, relief=tk.SUNKEN, padding="2")
@@ -341,6 +349,8 @@ class MainWindow:
             if dialog.result:
                 self.current_project = dialog.result
                 self.update_project_info()
+                # 自动打开配音模块
+                self.show_dubbing_module()
                 if self.is_debug:
                     print(self.current_project)
         except Exception as e:
@@ -358,14 +368,13 @@ class MainWindow:
             if dialog.selected_project:
                 self.current_project = dialog.selected_project
                 self.update_project_info()
+                # 自动打开配音模块
+                self.show_dubbing_module()
 
-
-                # 显示成功消息
-                messagebox.showinfo("成功", f"已打开项目: {self.current_project.name}")
 
                 # 如果有模块已经打开，刷新模块内容
-                if self.current_main_module:
-                    self.create_module_tabs(self.current_main_module)
+                # if self.current_main_module:
+                #     self.create_module_tabs(self.current_main_module)
 
             if self.is_debug:
                 print(self.current_project)
@@ -386,30 +395,29 @@ class MainWindow:
         if self.current_project:
             self.project_name_var.set(self.current_project.name)
 
-            # 更新章节数和角色数（需要从数据库查询）
+            # 更新章节数和角色数
             try:
                 chapter_count = self.app_controller.chapter_controller.get_chapter_count(self.current_project.id)
-                character_count = self.app_controller.character_controller.get_character_count(self.current_project.id)
+                # 获取角色数量 - 需要确保role_controller有get_role_count方法
+                # 如果没有，可以使用 len(self.app_controller.role_controller.get_roles_by_project(self.current_project.id))
+                roles = self.app_controller.role_controller.get_roles_by_project(self.current_project.id)
+                role_count = len(roles)
 
                 self.chapter_count_var.set(f"章节:{chapter_count}")
-                self.character_count_var.set(f"角色:{character_count}")
+                self.character_count_var.set(f"角色:{role_count}")
             except:
-                # 如果查询失败，显示默认值
                 self.chapter_count_var.set("章节:0")
                 self.character_count_var.set("角色:0")
 
-            # 如果当前在配音模块，刷新标签页内容
-            if self.current_main_module == 'dubbing' and hasattr(self, 'dubbing_notebook'):
-                current_tab = self.dubbing_notebook.index(self.dubbing_notebook.select())
-                if current_tab == 0:  # 章节编辑标签页
-                    # 重置章节编辑器创建状态，强制重新创建
-                    if hasattr(self, 'chapter_editor_created'):
-                        delattr(self, 'chapter_editor_created')
-                    self.setup_chapter_editor()
-        else:
-            self.project_name_var.set("无项目")
-            self.chapter_count_var.set("章节:0")
-            self.character_count_var.set("角色:0")
+            # 如果当前在配音模块的角色库标签页，刷新内容
+            if (self.current_main_module == 'dubbing' and
+                    hasattr(self, 'dubbing_notebook') and
+                    self.dubbing_notebook.index(self.dubbing_notebook.select()) == 1):  # 角色库标签页
+
+                # 强制重新创建角色库界面
+                if hasattr(self, 'role_editor'):
+                    delattr(self, 'role_editor')
+                self.setup_role_library()
 
     def load_projects(self):
         """加载项目列表"""

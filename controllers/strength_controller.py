@@ -19,6 +19,38 @@ class StrengthController(BaseController):
             raise BusinessException(f"情绪强度 '{name}' 已存在")
         return result
 
+    # 在 app/controllers/strength_controller.py 中添加
+    def ensure_default_strengths(self) -> List[StrengthEntity]:
+        """确保默认强度数据存在"""
+        strengths = self.strength_service.get_all_strengths()
+
+        if not strengths:
+            print("强度数据为空，正在创建默认强度...")
+            default_strengths = [
+                {"name": "微弱", "description": "几乎察觉不到的强度"},
+                {"name": "稍弱", "description": "轻微的强度"},
+                {"name": "中等", "description": "一般的强度"},
+                {"name": "较强", "description": "明显的强度"},
+                {"name": "强烈", "description": "非常强烈的强度"}
+            ]
+
+            for strength_data in default_strengths:
+                try:
+                    self.create_strength(
+                        name=strength_data["name"],
+                        description=strength_data["description"]
+                    )
+                except BusinessException as e:
+                    # 如果已经存在，忽略错误
+                    if "已存在" not in str(e):
+                        raise e
+
+            # 重新获取强度列表
+            strengths = self.strength_service.get_all_strengths()
+            print(f"创建了 {len(strengths)} 个默认强度")
+
+        return strengths
+
     def get_strength(self, strength_id: int) -> StrengthEntity:
         """根据ID查询情绪强度"""
         entity = self.strength_service.get_strength(strength_id)

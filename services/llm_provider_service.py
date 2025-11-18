@@ -23,9 +23,12 @@ class LLMProviderService:
         - 如果存在，抛出异常或返回错误
         - 调用 repository.create 插入数据库
         """
+        print(f"服务层调试 - update_llm_provider 被调用")
         llm_provider = self.repository.get_by_name(entity.name)
         if llm_provider:
             return None
+        # 添加调试
+        print(f"服务层调试 - entity.model_list: '{entity.model_list}'")
         # 手动将entity转化为po
         po = LLMProviderPO(**entity.__dict__)
         res = self.repository.create(po)

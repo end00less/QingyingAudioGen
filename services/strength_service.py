@@ -13,7 +13,7 @@ class StrengthService:
         """注入 repository"""
         self.repository = repository
 
-    def create_strength(self,  entity: StrengthEntity):
+    def create_strength(self, entity: StrengthEntity):
         """创建新情绪强弱枚举
         - 检查同名情绪强弱枚举是否存在
         - 如果存在，抛出异常或返回错误
@@ -34,6 +34,33 @@ class StrengthService:
         # 将po转化为entity
         return entity
 
+    # 在 app/services/strength_service.py 中添加
+    def create_default_strengths(self):
+        """创建默认强度数据"""
+        default_strengths = [
+            {"name": "微弱", "description": "几乎察觉不到的强度"},
+            {"name": "稍弱", "description": "轻微的强度"},
+            {"name": "中等", "description": "一般的强度"},
+            {"name": "较强", "description": "明显的强度"},
+            {"name": "强烈", "description": "非常强烈的强度"}
+        ]
+
+        created_count = 0
+        for strength_data in default_strengths:
+            # 检查是否已存在
+            existing = self.repository.get_by_name(strength_data["name"])
+            if not existing:
+                # 创建强度
+                strength_entity = StrengthEntity(
+                    name=strength_data["name"],
+                    description=strength_data["description"]
+                )
+                po = StrengthPO(**strength_entity.__dict__)
+                self.repository.create(po)
+                created_count += 1
+
+        print(f"创建了 {created_count} 个默认强度")
+        return created_count > 0
 
     def get_strength(self, strength_id: int) -> Optional[StrengthEntity]:
         """根据 ID 查询情绪强弱枚举"""
@@ -55,7 +82,7 @@ class StrengthService:
         ]
         return entities
 
-    def update_strength(self, strength_id: int, data:dict) -> bool:
+    def update_strength(self, strength_id: int, data: dict) -> bool:
         """更新情绪强弱枚举
         - 可以只更新部分字段
         """

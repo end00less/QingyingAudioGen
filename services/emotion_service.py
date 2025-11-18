@@ -34,6 +34,37 @@ class EmotionService:
         # 将po转化为entity
         return entity
 
+    # 在 app/services/emotion_service.py 中添加
+    def create_default_emotions(self):
+        """创建默认情绪数据"""
+        default_emotions = [
+            {"name": "高兴", "description": "开心、愉悦的情绪"},
+            {"name": "生气", "description": "愤怒、不满的情绪"},
+            {"name": "伤心", "description": "悲伤、难过的情绪"},
+            {"name": "害怕", "description": "恐惧、担忧的情绪"},
+            {"name": "厌恶", "description": "讨厌、反感的情绪"},
+            {"name": "低落", "description": "沮丧、失落的情绪"},
+            {"name": "惊喜", "description": "惊讶、意外的情绪"},
+            {"name": "平静", "description": "中性、平稳的情绪"}
+        ]
+
+        created_count = 0
+        for emotion_data in default_emotions:
+            # 检查是否已存在
+            existing = self.repository.get_by_name(emotion_data["name"])
+            if not existing:
+                # 创建情绪
+                emotion_entity = EmotionEntity(
+                    name=emotion_data["name"],
+                    description=emotion_data["description"]
+                )
+                po = EmotionPO(**emotion_entity.__dict__)
+                self.repository.create(po)
+                created_count += 1
+
+        print(f"创建了 {created_count} 个默认情绪")
+        return created_count > 0
+
 
     def get_emotion(self, emotion_id: int) -> Optional[EmotionEntity]:
         """根据 ID 查询情绪枚举"""

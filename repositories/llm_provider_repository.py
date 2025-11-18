@@ -21,6 +21,7 @@ class LLMProviderRepository:
         self.db.add(llm_provider_data)
         self.db.commit()
         self.db.refresh(llm_provider_data)
+        # print(f"repo调试 - model_list: '{llm_provider_data.model_list}'")
         return llm_provider_data
 
     def update(self, llm_provider_id: int, llm_provider_data: dict) -> Optional[LLMProviderPO]:

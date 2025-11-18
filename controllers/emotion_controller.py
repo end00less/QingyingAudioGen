@@ -19,6 +19,40 @@ class EmotionController(BaseController):
             raise BusinessException(f"情绪 '{name}' 已存在")
         return result
 
+    def ensure_default_emotions(self) -> List[EmotionEntity]:
+        """确保默认情绪数据存在"""
+        emotions = self.emotion_service.get_all_emotions()
+
+        if not emotions:
+            print("情绪数据为空，正在创建默认情绪...")
+            default_emotions = [
+                {"name": "高兴", "description": "开心、愉悦的情绪"},
+                {"name": "生气", "description": "愤怒、不满的情绪"},
+                {"name": "伤心", "description": "悲伤、难过的情绪"},
+                {"name": "害怕", "description": "恐惧、担忧的情绪"},
+                {"name": "厌恶", "description": "讨厌、反感的情绪"},
+                {"name": "低落", "description": "沮丧、失落的情绪"},
+                {"name": "惊喜", "description": "惊讶、意外的情绪"},
+                {"name": "平静", "description": "中性、平稳的情绪"}
+            ]
+
+            for emotion_data in default_emotions:
+                try:
+                    self.create_emotion(
+                        name=emotion_data["name"],
+                        description=emotion_data["description"]
+                    )
+                except BusinessException as e:
+                    # 如果已经存在，忽略错误
+                    if "已存在" not in str(e):
+                        raise e
+
+            # 重新获取情绪列表
+            emotions = self.emotion_service.get_all_emotions()
+            print(f"创建了 {len(emotions)} 个默认情绪")
+
+        return emotions
+
     def get_emotion(self, emotion_id: int) -> EmotionEntity:
         """根据ID查询情绪"""
         entity = self.emotion_service.get_emotion(emotion_id)

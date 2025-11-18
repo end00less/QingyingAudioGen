@@ -1,38 +1,43 @@
+# app/core/llm_engine.py
 import json
 import re
 import time
 import random
-import openai
-from typing import Optional, Dict, Any
-import tkinter as tk
-from tkinter import ttk, scrolledtext
-import threading
+from openai import OpenAI
+from app.core.prompts import get_auto_fix_json_prompt
 
 
 class LLMEngine:
     def __init__(self, api_key: str, base_url: str, model_name: str, custom_params: str = None):
         """
-        LLM引擎 - 桌面版
+        api_key: LLM API Key
+        base_url: OpenAI-compatible API URL（例如企业版/自建 LLM）
+        model_name: 模型名称
+        custom_params: 自定义参数字符串
         """
         self.api_key = api_key
-        self.base_url = base_url.rstrip("/")
+        self.base_url = base_url.rstrip("/")  # 去掉末尾斜杠
         self.model_name = model_name
 
         # 解析自定义参数
         self.custom_params = {}
         if custom_params:
             try:
-                self.custom_params = json.loads(custom_params)
-            except:
-                self.custom_params = {
-                    "temperature": 0.7,
-                    "top_p": 0.9,
-                    "max_tokens": 2000
-                }
+                if isinstance(custom_params, str):
+                    self.custom_params = json.loads(custom_params)
+                else:
+                    self.custom_params = custom_params
 
-        # 配置OpenAI客户端
-        openai.api_key = api_key
-        openai.api_base = self.base_url
+                if not isinstance(self.custom_params, dict):
+                    self.custom_params = {}
+            except (json.JSONDecodeError, TypeError):
+                self.custom_params = {}
+
+        # 初始化 OpenAI 客户端
+        self.client = OpenAI(
+            api_key=api_key,
+            base_url=self.base_url
+        )
 
     def _extract_result_tag(self, text: str) -> str:
         """提取 <result> 标签内容"""
@@ -46,146 +51,162 @@ class LLMEngine:
         测试：生成结果并返回
         """
         try:
-            response = openai.ChatCompletion.create(
-                model=self.model_name,
-                messages=[{"role": "user", "content": prompt}],
-                timeout=30,
-                **self.custom_params
-            )
+            # 构建请求参数
+            request_params = {
+                "model": self.model_name,
+                "messages": [{"role": "user", "content": prompt}],
+                "timeout": 30.0,  # 30秒超时
+            }
+
+            # 合并自定义参数
+            request_params.update(self.custom_params)
+
+            response = self.client.chat.completions.create(**request_params)
             return response.choices[0].message.content
+
         except Exception as e:
-            raise Exception(f"LLM调用失败: {str(e)}")
+            raise Exception(f"LLM测试失败: {str(e)}")
 
-    def generate_text_stream(self, prompt: str, callback=None) -> str:
+    def generate_text(self, prompt: str, retries: int = 3, delay: float = 1.0) -> str:
         """
-        流式生成：边生成边通过回调输出
+        流式生成：边生成边输出
         """
-        full_text = ""
+        for attempt in range(retries):
+            try:
+                # 构建请求参数
+                request_params = {
+                    "model": self.model_name,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "stream": True,
+                    "timeout": 300.0,  # 5分钟超时
+                }
 
-        try:
-            response = openai.ChatCompletion.create(
-                model=self.model_name,
-                messages=[{"role": "user", "content": prompt}],
-                stream=True,
-                timeout=300,
-                **self.custom_params
-            )
+                # 合并自定义参数
+                request_params.update(self.custom_params)
 
-            for chunk in response:
-                if 'choices' in chunk and 'delta' in chunk['choices'][0]:
-                    content = chunk['choices'][0]['delta'].get('content')
-                    if content:
+                # 流式响应
+                response = self.client.chat.completions.create(**request_params)
+
+                # 拼接内容
+                full_text = ""
+                for chunk in response:
+                    if chunk.choices[0].delta.content is not None:
+                        content = chunk.choices[0].delta.content
+                        print(content, end="", flush=True)  # 实时输出
                         full_text += content
-                        if callback:
-                            callback(content)
 
+                print("\n--- 输出完成 ---")
+                return full_text
+
+            except Exception as e:
+                if attempt < retries - 1:
+                    sleep_time = delay * (2 ** attempt) + random.random()
+                    print(f"第{attempt + 1}次尝试失败，{sleep_time:.2f}秒后重试...")
+                    time.sleep(sleep_time)
+                else:
+                    raise Exception(f"LLM调用失败: {str(e)}")
+
+    def generate_smart_text(self, prompt: str) -> str:
+        """
+        智能文本生成（非流式）
+        """
+        try:
+            # 构建请求参数
+            request_params = {
+                "model": self.model_name,
+                "messages": [{"role": "user", "content": prompt}],
+                "timeout": 300.0,  # 5分钟超时
+            }
+
+            # 合并自定义参数
+            request_params.update(self.custom_params)
+
+            response = self.client.chat.completions.create(**request_params)
+            return response.choices[0].message.content
+
+        except Exception as e:
+            raise Exception(f"智能文本生成失败: {str(e)}")
+
+    def generate_smart_text_stream(self, prompt: str) -> str:
+        """
+        智能文本生成（流式）
+        """
+        try:
+            # 构建请求参数
+            request_params = {
+                "model": self.model_name,
+                "messages": [{"role": "user", "content": prompt}],
+                "stream": True,
+                "timeout": 300.0,  # 5分钟超时
+            }
+
+            # 合并自定义参数
+            request_params.update(self.custom_params)
+
+            response = self.client.chat.completions.create(**request_params)
+
+            # 拼接内容
+            full_text = ""
+            for chunk in response:
+                if chunk.choices[0].delta.content is not None:
+                    content = chunk.choices[0].delta.content
+                    print(content, end="", flush=True)  # 实时输出
+                    full_text += content
+
+            print("\n--- 输出完成 ---")
             return full_text
 
         except Exception as e:
-            if callback:
-                callback(f"\n[错误] LLM调用失败: {str(e)}\n")
-            raise
+            raise Exception(f"智能文本流式生成失败: {str(e)}")
 
-    def save_load_json(self, json_str: str) -> Dict:
-        """JSON解析和自动修复"""
+    # json输出问题解决
+    def save_load_json(self, json_str: str):
+        """解析JSON，如果失败则尝试修复"""
+        # 先尝试直接加载json
         try:
-            return json.loads(json_str)
-        except json.JSONDecodeError:
-            print("JSON解析错误，尝试修复...")
-            # 简单的JSON修复逻辑
-            json_str = re.sub(r',\s*}', '}', json_str)
-            json_str = re.sub(r',\s*]', ']', json_str)
-            json_str = re.sub(r"'", '"', json_str)
+            json_obj = json.loads(json_str)
+            return json_obj
+        except json.JSONDecodeError as e:
+            print(f"JSON 解析错误: {e}，尝试修复")
             try:
-                return json.loads(json_str)
-            except:
-                raise ValueError("JSON解析失败")
+                # 尝试修复JSON
+                prompt = get_auto_fix_json_prompt(json_str)
+                res = self.generate_text(prompt)
+
+                # 提取<result>标签内容
+                cleaned_res = self._extract_result_tag(res)
+                return json.loads(cleaned_res)
+
+            except Exception as fix_error:
+                print(f"JSON修复失败: {fix_error}")
+                raise Exception(f"JSON解析和修复都失败: {str(fix_error)}")
 
 
-class LLMTestDialog:
-    """LLM测试对话框"""
+def main():
+    # 测试配置
+    api_key = "sk-89c8b48798b6422fa8e9b59664dabf1e"
+    api_url = "https://api.deepseek.com"
+    model_name = "deepseek-reasoner"
 
-    def __init__(self, parent, llm_engine: LLMEngine):
-        self.llm_engine = llm_engine
-        self.parent = parent
+    llm = LLMEngine(api_key, api_url, model_name)
 
-        self.setup_dialog()
+    # 测试 prompt
+    prompt = "输出<result>标签的结果，例如：<result>这是测试内容</result>。问题：你好，请问你是谁"
 
-    def setup_dialog(self):
-        """设置测试对话框"""
-        self.dialog = tk.Toplevel(self.parent)
-        self.dialog.title("LLM服务测试")
-        self.dialog.geometry("600x500")
-        self.dialog.transient(self.parent)
+    try:
+        # 测试非流式
+        print("=== 测试非流式生成 ===")
+        result = llm.generate_text_test(prompt)
+        print("LLM 返回结果:", result)
 
-        main_frame = ttk.Frame(self.dialog, padding="15")
-        main_frame.pack(fill=tk.BOTH, expand=True)
+        # 测试流式
+        print("\n=== 测试流式生成 ===")
+        result_stream = llm.generate_text(prompt)
+        print("LLM 流式返回结果:", result_stream)
 
-        # 测试提示词
-        ttk.Label(main_frame, text="测试提示词:").pack(anchor=tk.W, pady=(0, 5))
-        self.prompt_text = scrolledtext.ScrolledText(main_frame, height=4, width=60)
-        self.prompt_text.pack(fill=tk.X, pady=(0, 10))
-        self.prompt_text.insert(1.0, "请用JSON格式输出一个简单的用户信息，包含name、age、city字段")
+    except Exception as e:
+        print("调用 LLM 出错：", e)
 
-        # 测试按钮
-        btn_frame = ttk.Frame(main_frame)
-        btn_frame.pack(fill=tk.X, pady=(0, 10))
 
-        ttk.Button(btn_frame, text="开始测试", command=self.start_test).pack(side=tk.LEFT, padx=(0, 10))
-        ttk.Button(btn_frame, text="清空结果", command=self.clear_output).pack(side=tk.LEFT)
-
-        # 输出区域
-        ttk.Label(main_frame, text="测试结果:").pack(anchor=tk.W, pady=(0, 5))
-        self.output_text = scrolledtext.ScrolledText(main_frame, height=15, width=60)
-        self.output_text.pack(fill=tk.BOTH, expand=True)
-
-        # 状态栏
-        self.status_var = tk.StringVar(value="就绪")
-        status_label = ttk.Label(main_frame, textvariable=self.status_var)
-        status_label.pack(anchor=tk.W, pady=(5, 0))
-
-    def start_test(self):
-        """开始测试"""
-        prompt = self.prompt_text.get(1.0, tk.END).strip()
-        if not prompt:
-            tk.messagebox.showwarning("警告", "请输入测试提示词")
-            return
-
-        self.status_var.set("测试中...")
-        self.output_text.insert(tk.END, "=== 开始测试 ===\n")
-
-        # 在新线程中执行测试
-        thread = threading.Thread(target=self._run_test, args=(prompt,))
-        thread.daemon = True
-        thread.start()
-
-    def _run_test(self, prompt: str):
-        """执行测试"""
-        try:
-            def callback(content):
-                self.output_text.insert(tk.END, content)
-                self.output_text.see(tk.END)
-                self.dialog.update()
-
-            result = self.llm_engine.generate_text_stream(prompt, callback)
-
-            self.output_text.insert(tk.END, f"\n\n=== 测试完成 ===\n")
-            self.output_text.insert(tk.END, f"总字符数: {len(result)}\n")
-
-            # 验证JSON格式
-            try:
-                json_data = self.llm_engine.save_load_json(result)
-                self.output_text.insert(tk.END, f"JSON验证: 成功\n")
-                self.output_text.insert(tk.END, f"JSON内容: {json.dumps(json_data, ensure_ascii=False, indent=2)}\n")
-            except:
-                self.output_text.insert(tk.END, f"JSON验证: 失败\n")
-
-            self.status_var.set("测试完成")
-
-        except Exception as e:
-            self.output_text.insert(tk.END, f"\n[错误] {str(e)}\n")
-            self.status_var.set("测试失败")
-
-    def clear_output(self):
-        """清空输出"""
-        self.output_text.delete(1.0, tk.END)
+if __name__ == "__main__":
+    main()
