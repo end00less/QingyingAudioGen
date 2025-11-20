@@ -247,25 +247,41 @@ class MainWindow:
             font=("Arial", 12)
         ).pack(expand=True, pady=50)
 
+    # 在 main_window.py 中修改 create_settings_tabs 方法
     def create_settings_tabs(self):
         """创建设置模块的标签页"""
         # 标签页控件
         self.settings_notebook = ttk.Notebook(self.module_container)
         self.settings_notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
-        # 项目设置标签页
-        self.project_settings_frame = ttk.Frame(self.settings_notebook)
-        self.settings_notebook.add(self.project_settings_frame, text="⚙️ 项目设置")
+
 
         # LLM配置标签页
         self.llm_settings_frame = ttk.Frame(self.settings_notebook)
         self.settings_notebook.add(self.llm_settings_frame, text="🤖 LLM配置")
 
-        # 项目设置内容
-        # self.setup_project_settings()
+        # TTS配置标签页
+        self.tts_settings_frame = ttk.Frame(self.settings_notebook)
+        self.settings_notebook.add(self.tts_settings_frame, text="🔊 TTS配置")
+
+        # TTS配置内容
+        self.setup_tts_settings()
 
         # LLM配置内容
         self.setup_llm_settings()
+
+    def setup_tts_settings(self):
+        """设置TTS配置页面"""
+        # 导入TTS设置界面
+        from app.ui.tts_settings_frame import TTSSettingsFrame
+
+        # 创建TTS设置界面
+        self.tts_settings = TTSSettingsFrame(
+            self.tts_settings_frame,
+            self.current_project,
+            self.app_controller
+        )
+        self.tts_settings.pack(fill=tk.BOTH, expand=True)
 
 
     def setup_project_settings(self):

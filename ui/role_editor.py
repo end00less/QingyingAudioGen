@@ -38,7 +38,7 @@ class RoleEditor(ttk.Frame):
         self.search_entry.bind('<KeyRelease>', self.on_search)
 
         # 按钮
-        ttk.Button(toolbar_frame, text="管理员仓库", command=self.open_voice_manager).pack(side=tk.LEFT, padx=5)
+        ttk.Button(toolbar_frame, text="管理音色库", command=self.open_voice_manager).pack(side=tk.LEFT, padx=5)
         ttk.Button(toolbar_frame, text="新建角色", command=self.create_role).pack(side=tk.LEFT, padx=5)
 
         # 角色列表框架
@@ -195,6 +195,24 @@ class RoleEditor(ttk.Frame):
         if dialog.result:
             self.load_data()  # 刷新数据
 
+    # 在 role_editor.py 中修改 open_voice_manager 方法
     def open_voice_manager(self):
         """打开音色管理器"""
-        messagebox.showinfo("提示", "音色管理功能待实现")
+        from app.ui.voice_library_frame import VoiceLibraryFrame
+
+        # 创建音色库窗口
+        voice_window = tk.Toplevel(self.parent)
+        voice_window.title("音色库管理")
+        voice_window.geometry("1000x700")
+        voice_window.transient(self.parent)
+        voice_window.grab_set()
+
+        # 创建音色库界面
+        voice_library = VoiceLibraryFrame(voice_window, self.current_project, self.app_controller)
+        voice_library.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        # 居中显示
+        voice_window.update_idletasks()
+        x = (voice_window.winfo_screenwidth() - voice_window.winfo_width()) // 2
+        y = (voice_window.winfo_screenheight() - voice_window.winfo_height()) // 2
+        voice_window.geometry(f"+{x}+{y}")

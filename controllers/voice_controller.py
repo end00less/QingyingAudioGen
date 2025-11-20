@@ -70,3 +70,17 @@ class VoiceController(BaseController):
         if not success:
             raise BusinessException("删除失败")
         return success
+
+    def initialize_default_voices(self, tts_provider_id: int) -> bool:
+        """初始化默认音色库"""
+        try:
+            # 验证TTS服务商是否存在
+            tts_provider = self.tts_provider_service.get_tts_provider(tts_provider_id)
+            if not tts_provider:
+                raise BusinessException(f"TTS服务商 {tts_provider_id} 不存在")
+
+            return self.voice_service.initialize_default_voices(tts_provider_id)
+
+        except Exception as e:
+            print(f"初始化默认音色失败: {e}")
+            return False
