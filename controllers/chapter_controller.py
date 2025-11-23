@@ -266,12 +266,18 @@ class ChapterController(BaseController):
             if not all_line_data:
                 raise BusinessException("未解析出任何有效的台词数据")
 
-            audio_path = f"{project.project_root_path}/{project_id}/{chapter_id}/audio"
+            # 修复路径生成 - 使用 os.path.join 确保正确的路径分隔符
             import os
-            os.makedirs(audio_path, exist_ok=True)
+            audio_dir = os.path.normpath(os.path.join(
+                project.project_root_path,
+                str(project_id),
+                str(chapter_id),
+                "audio"
+            ))
+            os.makedirs(audio_dir, exist_ok=True)
 
             self.line_service.update_init_lines(
-                all_line_data, project_id, chapter_id, emotions_dict, strengths_dict, audio_path
+                all_line_data, project_id, chapter_id, emotions_dict, strengths_dict, audio_dir
             )
 
             # 更新进度：完成
@@ -352,12 +358,18 @@ class ChapterController(BaseController):
 
         lines_data = [LineInitDTO(**line) for line in lines_data]
 
-        audio_path = f"{project.project_root_path}/{project_id}/{chapter_id}/audio"
+        # 修复这里的路径生成
         import os
-        os.makedirs(audio_path, exist_ok=True)
+        audio_dir = os.path.normpath(os.path.join(
+            project.project_root_path,
+            str(project_id),
+            str(chapter_id),
+            "audio"
+        ))
+        os.makedirs(audio_dir, exist_ok=True)
 
         self.line_service.update_init_lines(
-            lines_data, project_id, chapter_id, emotions_dict, strengths_dict, audio_path
+            lines_data, project_id, chapter_id, emotions_dict, strengths_dict, audio_dir
         )
         return True
 

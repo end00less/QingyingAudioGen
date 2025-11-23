@@ -13,7 +13,7 @@ from openpyxl import Workbook
 from sqlalchemy import Sequence
 
 
-from app.core.audio_engine import AudioProcessor
+from app.core.audio_engin import AudioProcessor
 from app.core.config import getConfigPath, getFfmpegPath
 from app.core.subtitle import subtitle_engine
 from app.core.tts_engine import TTSEngine

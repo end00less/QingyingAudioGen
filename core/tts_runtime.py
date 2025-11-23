@@ -1,15 +1,19 @@
 # app/tts_worker.py
 import asyncio
 from fastapi import FastAPI
-from markdown_it.rules_block import reference
 
 from app.core.ws_manager import manager
 from app.db.database import SessionLocal
-from app.routers.chapter_router import get_voice_service, get_emotion_service, get_strength_service
-from app.routers.multi_emotion_voice_router import get_multi_emotion_voice_service
-from app.routers.role_router import get_line_service, get_role_service, get_project_service
+from app.services.line_service import LineService
+from app.services.role_service import RoleService
+from app.services.voice_service import VoiceService
+from app.services.project_service import ProjectService
+from app.services.emotion_service import EmotionService
+from app.services.strength_service import StrengthService
+from app.services.multi_emotion_voice_service import MultiEmotionVoiceService
 
 TTS_TIMEOUT_SECONDS = 1200  # 可调
+
 def emotion_text_to_vector(emotion: str, intensity: str) -> list[float]:
     """
     将情绪(文本) + 强度(文本) 转换成 8维向量
@@ -31,6 +35,7 @@ def emotion_text_to_vector(emotion: str, intensity: str) -> list[float]:
         idx = emotions.index(emotion)
         vec[idx] = intensity_map[intensity]
     return vec
+
 async def tts_worker(app: FastAPI):
     q = app.state.tts_queue
     ex = app.state.tts_executor
@@ -38,16 +43,15 @@ async def tts_worker(app: FastAPI):
         project_id, dto = await q.get()
         db = SessionLocal()
         try:
-            line_service = get_line_service(db)
-            role_service = get_role_service(db)
-            voice_service = get_voice_service(db)
-            multi_emotion_service = get_multi_emotion_voice_service(db)
-            project_service = get_project_service(db)
-            emotion_service = get_emotion_service(db)
-            strength_service = get_strength_service(db)
+            # 直接初始化服务类
+            line_service = LineService(db)
+            role_service = RoleService(db)
+            voice_service = VoiceService(db)
+            multi_emotion_service = MultiEmotionVoiceService(db)
+            project_service = ProjectService(db)
+            emotion_service = EmotionService(db)
+            strength_service = StrengthService(db)
 
-
-            # line_service.update_line(dto.id, {"status": "processing"})
             await manager.broadcast({
                 "event": "line_update",
                 "line_id": dto.id,
@@ -59,13 +63,6 @@ async def tts_worker(app: FastAPI):
             role = role_service.get_role(dto.role_id)
             voice = voice_service.get_voice(role.default_voice_id)
             reference_path = voice.reference_path
-
-
-            # if voice.is_multi_emotion == 1:
-            #     # 使用多音色
-            #     multi_emotion = multi_emotion_service.get_multi_emotion_voice_by_voice_id_emotion_id_strength_id(voice.id, dto.emotion_id, dto.strength_id)
-            #     if multi_emotion is not None:
-            #         reference_path = multi_emotion.reference_path
 
             # 9.13
             emotion = emotion_service.get_emotion(dto.emotion_id)
@@ -124,6 +121,5 @@ async def tts_worker(app: FastAPI):
             })
 
         finally:
-
             db.close()
             q.task_done()

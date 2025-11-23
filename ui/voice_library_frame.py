@@ -3,15 +3,18 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 from typing import List, Optional
 import os
+import threading
+import time
 
 from app.entity.voice_entity import VoiceEntity
 from app.entity.tts_provider_entity import TTSProviderEntity
+from app.services.audio_player_service import audio_player
 
 
 class VoiceLibraryFrame(ttk.Frame):
     def __init__(self, parent, current_project, app_controller):
         super().__init__(parent)
-        self.parent = parent
+        self.parent = parent  # 添加 parent 引用
         self.current_project = current_project
         self.app_controller = app_controller
 
@@ -22,6 +25,8 @@ class VoiceLibraryFrame(ttk.Frame):
 
         # 存储播放按钮状态
         self.play_buttons = {}  # voice_id -> button
+        self.current_playing_voice_id = None
+        self.play_thread = None
 
         self.setup_ui()
         self.load_data()
@@ -74,6 +79,9 @@ class VoiceLibraryFrame(ttk.Frame):
             command=self.on_filter_changed
         ).grid(row=0, column=4, sticky=tk.W)
 
+        # 配置网格权重
+        filter_frame.columnconfigure(3, weight=1)
+
     def create_voice_grid(self, parent):
         """创建音色网格显示区域"""
         # 创建滚动框架
@@ -119,7 +127,14 @@ class VoiceLibraryFrame(ttk.Frame):
             command=self.import_voice
         ).pack(side=tk.LEFT, padx=5)
 
-    # 在voice_library_frame.py的load_data方法中
+        # 全局停止按钮
+        ttk.Button(
+            toolbar_frame,
+            text="停止所有播放",
+            command=self.stop_all_playback,
+            style="Accent.TButton"
+        ).pack(side=tk.RIGHT, padx=5)
+
     def load_data(self):
         """加载数据"""
         try:
@@ -132,12 +147,6 @@ class VoiceLibraryFrame(ttk.Frame):
                 self.tts_provider_combo.set(provider_names[0])
                 self.current_tts_provider_id = self.tts_providers[0].id
 
-                # 自动初始化默认音色（如果音色库为空）
-                voices = self.app_controller.voice_controller.get_voices_by_tts_provider(self.current_tts_provider_id)
-                if not voices:
-                    print("音色库为空，正在初始化默认音色...")
-                    self.app_controller.voice_controller.initialize_default_voices(self.current_tts_provider_id)
-
             # 加载音色
             self.refresh_voices()
 
@@ -146,6 +155,9 @@ class VoiceLibraryFrame(ttk.Frame):
 
     def refresh_voices(self):
         """刷新音色显示"""
+        # 清空播放按钮引用
+        self.play_buttons.clear()
+
         if not self.current_tts_provider_id:
             return
 
@@ -189,11 +201,21 @@ class VoiceLibraryFrame(ttk.Frame):
 
         if not self.filtered_voices:
             # 显示空状态
+            empty_frame = ttk.Frame(self.scrollable_frame)
+            empty_frame.pack(expand=True, pady=50)
+
             ttk.Label(
-                self.scrollable_frame,
-                text="暂无音色数据",
-                font=("Arial", 12)
-            ).pack(expand=True, pady=50)
+                empty_frame,
+                text="🎵 暂无音色数据",
+                font=("Arial", 14)
+            ).pack(pady=5)
+
+            ttk.Label(
+                empty_frame,
+                text="点击'新建音色'按钮添加第一个音色",
+                font=("Arial", 10),
+                foreground="gray"
+            ).pack()
             return
 
         # 创建音色卡片网格
@@ -224,43 +246,149 @@ class VoiceLibraryFrame(ttk.Frame):
     def create_voice_card(self, voice: VoiceEntity) -> ttk.Frame:
         """创建音色卡片"""
         card_frame = ttk.LabelFrame(self.scrollable_frame, text=voice.name, padding="10")
-        card_frame.configure(width=200, height=150)
+        card_frame.configure(width=220, height=180)
 
         # 音色信息
         info_text = f"名称: {voice.name}\n"
         if voice.description:
-            info_text += f"描述: {voice.description}\n"
-        info_text += f"多情绪: {'是' if voice.is_multi_emotion else '否'}"
+            desc = voice.description[:20] + "..." if len(voice.description) > 20 else voice.description
+            info_text += f"描述: {desc}\n"
+        info_text += f"多情绪: {'是' if voice.is_multi_emotion else '否'}\n"
 
-        ttk.Label(card_frame, text=info_text, justify=tk.LEFT).pack(anchor=tk.W)
+        # 检查样本文件状态
+        has_sample = voice.reference_path and os.path.exists(voice.reference_path)
+        if has_sample:
+            info_text += "✅ 有样本"
+        else:
+            info_text += "❌ 无样本"
 
-        # 操作按钮
+        info_label = ttk.Label(card_frame, text=info_text, justify=tk.LEFT)
+        info_label.pack(anchor=tk.W, pady=(0, 10))
+
+        # 操作按钮框架
         btn_frame = ttk.Frame(card_frame)
-        btn_frame.pack(fill=tk.X, pady=(10, 0))
+        btn_frame.pack(fill=tk.X, pady=(5, 0))
 
+        # 播放/停止按钮
+        play_btn_text = "⏹ 停止" if self.current_playing_voice_id == voice.id else "▶ 播放"
+        play_btn = ttk.Button(
+            btn_frame,
+            text=play_btn_text,
+            command=lambda v=voice: self.toggle_play_audio(v),
+            width=8,
+            state="normal" if has_sample else "disabled"
+        )
+        play_btn.pack(side=tk.LEFT, padx=2)
+
+        # 存储播放按钮引用
+        self.play_buttons[voice.id] = play_btn
+
+        # 编辑按钮
         ttk.Button(
             btn_frame,
             text="编辑",
             command=lambda v=voice: self.edit_voice(v),
-            width=8
+            width=6
         ).pack(side=tk.LEFT, padx=2)
 
+        # 删除按钮
         ttk.Button(
             btn_frame,
             text="删除",
             command=lambda v=voice: self.delete_voice(v),
-            width=8
+            width=6
         ).pack(side=tk.LEFT, padx=2)
 
+        # 如果是多情绪音色，添加情绪管理按钮
         if voice.is_multi_emotion:
             ttk.Button(
                 btn_frame,
-                text="情绪管理",
+                text="情绪",
                 command=lambda v=voice: self.manage_emotions(v),
-                width=8
+                width=6
             ).pack(side=tk.LEFT, padx=2)
 
         return card_frame
+
+    def toggle_play_audio(self, voice: VoiceEntity):
+        """切换音频播放/停止"""
+        if not voice.reference_path or not os.path.exists(voice.reference_path):
+            messagebox.showwarning("警告", f"音色 {voice.name} 没有可用的样本文件")
+            return
+
+        play_btn = self.play_buttons.get(voice.id)
+        if not play_btn:
+            return
+
+        if self.current_playing_voice_id == voice.id and audio_player.is_playing:
+            # 正在播放这个文件，点击停止
+            self.stop_audio_playback()
+            play_btn.configure(text="▶ 播放")
+            self.current_playing_voice_id = None
+        else:
+            # 停止当前播放（如果有）
+            if audio_player.is_playing:
+                self.stop_audio_playback()
+                # 更新之前播放的按钮
+                if self.current_playing_voice_id:
+                    prev_btn = self.play_buttons.get(self.current_playing_voice_id)
+                    if prev_btn:
+                        prev_btn.configure(text="▶ 播放")
+
+            # 开始播放新文件
+            if self.play_audio(voice):
+                play_btn.configure(text="⏹ 停止")
+                self.current_playing_voice_id = voice.id
+                # 启动播放监控
+                self.start_playback_monitor(voice)
+            else:
+                messagebox.showerror("错误", f"播放音频失败: {voice.reference_path}")
+
+    def play_audio(self, voice: VoiceEntity) -> bool:
+        """播放音频文件 - 使用内置播放器"""
+        try:
+            # 使用内置音频播放器
+            success = audio_player.play_audio(voice.reference_path)
+            return success
+
+        except Exception as e:
+            print(f"播放音频失败: {e}")
+            return False
+
+    def start_playback_monitor(self, voice: VoiceEntity):
+        """启动播放监控"""
+
+        def monitor():
+            while audio_player.is_playing and self.current_playing_voice_id == voice.id:
+                time.sleep(0.1)
+
+            # 播放结束或被停止
+            if self.current_playing_voice_id == voice.id:
+                self.after(0, lambda: self.update_play_button(voice.id, "▶ 播放"))
+                self.current_playing_voice_id = None
+
+        self.play_thread = threading.Thread(target=monitor, daemon=True)
+        self.play_thread.start()
+
+    def stop_audio_playback(self):
+        """停止音频播放"""
+        audio_player.stop_audio()
+        self.current_playing_voice_id = None
+
+    def stop_all_playback(self):
+        """停止所有播放"""
+        if audio_player.is_playing:
+            self.stop_audio_playback()
+            # 更新所有播放按钮
+            for voice_id, play_btn in self.play_buttons.items():
+                play_btn.configure(text="▶ 播放")
+            messagebox.showinfo("提示", "已停止所有音频播放")
+
+    def update_play_button(self, voice_id: int, text: str):
+        """更新播放按钮文本"""
+        play_btn = self.play_buttons.get(voice_id)
+        if play_btn and play_btn.winfo_exists():
+            play_btn.configure(text=text)
 
     def on_tts_provider_changed(self, event):
         """TTS服务商改变事件"""
@@ -289,11 +417,12 @@ class VoiceLibraryFrame(ttk.Frame):
             return
 
         dialog = VoiceDialog(
-            self,
+            self.parent,  # 使用 self.parent 而不是 self
             self.current_tts_provider_id,
             self.app_controller
         )
-        self.wait_window(dialog.dialog)
+        # 修复：使用 self.parent.wait_window 而不是 self.wait_window
+        self.parent.wait_window(dialog.dialog)
 
         if dialog.result:
             self.refresh_voices()
@@ -303,12 +432,13 @@ class VoiceLibraryFrame(ttk.Frame):
         from app.ui.voice_dialog import VoiceDialog
 
         dialog = VoiceDialog(
-            self,
+            self.parent,  # 使用 self.parent 而不是 self
             self.current_tts_provider_id,
             self.app_controller,
             voice
         )
-        self.wait_window(dialog.dialog)
+        # 修复：使用 self.parent.wait_window 而不是 self.wait_window
+        self.parent.wait_window(dialog.dialog)
 
         if dialog.result:
             self.refresh_voices()
@@ -333,11 +463,12 @@ class VoiceLibraryFrame(ttk.Frame):
         from app.ui.multi_emotion_dialog import MultiEmotionDialog
 
         dialog = MultiEmotionDialog(
-            self,
+            self.parent,  # 使用 self.parent 而不是 self
             voice,
             self.app_controller
         )
-        self.wait_window(dialog.dialog)
+        # 修复：使用 self.parent.wait_window 而不是 self.wait_window
+        self.parent.wait_window(dialog.dialog)
 
     def import_voice(self):
         """导入音色"""

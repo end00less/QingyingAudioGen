@@ -1,10 +1,15 @@
-# ui/chapter_editor.py - 修复布局版本
+# ui/chapter_editor.py - 修复批量生成方法
+import logging
+import time
 import tkinter as tk
+import traceback
 from tkinter import ttk, messagebox, scrolledtext, filedialog
 import os
 import threading
 from app.core.app_context import AppContext
 from app.controllers.base_controller import BusinessException
+from app.core.tts_runtime import emotion_text_to_vector
+from app.services.audio_player_service import audio_player
 
 
 class ChapterEditor(ttk.Frame):
@@ -139,23 +144,24 @@ class ChapterEditor(ttk.Frame):
         ttk.Button(toolbar_frame, text="添加台词", command=self.add_line, width=10).pack(side=tk.LEFT, padx=(0, 5))
         ttk.Button(toolbar_frame, text="删除台词", command=self.delete_line, width=10).pack(side=tk.LEFT, padx=(0, 5))
         ttk.Button(toolbar_frame, text="生成语音", command=self.generate_audio, width=10).pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Button(toolbar_frame, text="批量生成", command=self.batch_generate, width=10).pack(side=tk.LEFT)
+        ttk.Button(toolbar_frame, text="批量生成", command=self.batch_generate_audio, width=10).pack(side=tk.LEFT)  # 修复：改为 batch_generate_audio
 
-        # 台词列表
-        columns = ('id', 'order', 'role', 'text_preview', 'status')
+        # 台词列表 - 隐藏ID列
+        columns = ('id', 'order', 'role', 'voice', 'text_preview', 'status')
         self.lines_tree = ttk.Treeview(parent, columns=columns, show='headings')
 
-        # 设置列标题
-        self.lines_tree.heading('id', text='ID')
+        # 设置列标题（不显示ID列）
         self.lines_tree.heading('order', text='序号')
         self.lines_tree.heading('role', text='角色')
+        self.lines_tree.heading('voice', text='绑定音色')
         self.lines_tree.heading('text_preview', text='台词内容')
         self.lines_tree.heading('status', text='状态')
 
-        # 设置列宽
-        self.lines_tree.column('id', width=40)
+        # 设置列宽（ID列宽度为0）
+        self.lines_tree.column('id', width=0, stretch=False)  # 隐藏ID列
         self.lines_tree.column('order', width=40)
         self.lines_tree.column('role', width=80)
+        self.lines_tree.column('voice', width=100)
         self.lines_tree.column('text_preview', width=200)
         self.lines_tree.column('status', width=60)
 
@@ -180,19 +186,26 @@ class ChapterEditor(ttk.Frame):
         self.role_combo = ttk.Combobox(form_frame, textvariable=self.role_var, width=15)
         self.role_combo.grid(row=0, column=1, sticky=tk.W, pady=5, padx=(5, 10))
 
+        # 绑定音色显示（只读）
+        ttk.Label(form_frame, text="绑定音色:").grid(row=0, column=2, sticky=tk.W, pady=5)
+        self.voice_var = tk.StringVar(value="未绑定")
+        voice_label = ttk.Label(form_frame, textvariable=self.voice_var, width=15,
+                                foreground="blue", background="#f0f0f0")
+        voice_label.grid(row=0, column=3, sticky=tk.W, pady=5, padx=(5, 0))
+
         # 情绪选择
-        ttk.Label(form_frame, text="情绪:").grid(row=0, column=2, sticky=tk.W, pady=5)
+        ttk.Label(form_frame, text="情绪:").grid(row=1, column=0, sticky=tk.W, pady=5)
         self.emotion_var = tk.StringVar()
         self.emotion_combo = ttk.Combobox(form_frame, textvariable=self.emotion_var, width=15)
         self.emotion_combo['values'] = ('高兴', '生气', '伤心', '害怕', '厌恶', '低落', '惊喜', '平静')
-        self.emotion_combo.grid(row=0, column=3, sticky=tk.W, pady=5, padx=(5, 0))
+        self.emotion_combo.grid(row=1, column=1, sticky=tk.W, pady=5, padx=(5, 10))
 
         # 强度选择
-        ttk.Label(form_frame, text="强度:").grid(row=1, column=0, sticky=tk.W, pady=5)
+        ttk.Label(form_frame, text="强度:").grid(row=1, column=2, sticky=tk.W, pady=5)
         self.strength_var = tk.StringVar()
         self.strength_combo = ttk.Combobox(form_frame, textvariable=self.strength_var, width=15)
         self.strength_combo['values'] = ('微弱', '稍弱', '中等', '较强', '强烈')
-        self.strength_combo.grid(row=1, column=1, sticky=tk.W, pady=5, padx=(5, 10))
+        self.strength_combo.grid(row=1, column=3, sticky=tk.W, pady=5, padx=(5, 0))
 
         # 台词内容
         ttk.Label(form_frame, text="台词内容:").grid(row=2, column=0, columnspan=4, sticky=tk.W, pady=5)
@@ -204,13 +217,145 @@ class ChapterEditor(ttk.Frame):
         btn_frame.grid(row=4, column=0, columnspan=4, pady=10)
 
         ttk.Button(btn_frame, text="保存台词", command=self.save_line, width=12).pack(side=tk.LEFT, padx=(0, 10))
-        ttk.Button(btn_frame, text="播放音频", command=self.play_audio, width=12).pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Button(btn_frame, text="生成语音", command=self.generate_audio, width=12).pack(side=tk.LEFT, padx=(0, 10))
+
+        # 保存播放按钮引用
+        self.play_button = ttk.Button(btn_frame, text="播放音频", command=self.play_audio, width=12)
+        self.play_button.pack(side=tk.LEFT, padx=(0, 10))
+
         ttk.Button(btn_frame, text="编辑音频", command=self.edit_audio, width=12).pack(side=tk.LEFT)
+
+        # 初始状态禁用播放按钮
+        self.play_button.config(state=tk.DISABLED)
 
         # 配置权重
         form_frame.columnconfigure(3, weight=1)
 
-    # 以下方法保持不变...
+        # 绑定角色选择事件，更新音色显示
+        self.role_combo.bind('<<ComboboxSelected>>', self.on_role_selected)
+
+    # 批量生成音频方法
+    def batch_generate_audio(self):
+        """批量生成语音"""
+        if not self.current_chapter_id:
+            messagebox.showwarning("警告", "请先选择章节")
+            return
+
+        try:
+            # 获取当前章节的所有台词
+            lines = self.line_controller.get_lines_by_chapter(self.current_chapter_id)
+            if not lines:
+                messagebox.showwarning("警告", "该章节没有台词")
+                return
+
+            # 过滤出未生成或生成失败的台词
+            pending_lines = [line for line in lines if line.status in ['pending', 'failed']]
+            if not pending_lines:
+                messagebox.showinfo("提示", "所有台词都已生成完成")
+                return
+
+            # 确认对话框
+            if not messagebox.askyesno("确认", f"确定要批量生成 {len(pending_lines)} 条台词的语音吗？\n这可能需要一些时间。"):
+                return
+
+            # 显示进度窗口
+            self.show_batch_generate_progress(pending_lines)
+
+        except BusinessException as e:
+            messagebox.showerror("错误", e.message)
+        except Exception as e:
+            messagebox.showerror("错误", f"批量生成失败: {str(e)}")
+
+    def show_batch_generate_progress(self, lines):
+        """显示批量生成进度"""
+        progress_window = tk.Toplevel(self)
+        progress_window.title("批量生成语音")
+        progress_window.geometry("500x150")
+        progress_window.transient(self)
+        progress_window.grab_set()
+        progress_window.resizable(False, False)
+
+        progress_frame = ttk.Frame(progress_window, padding="20")
+        progress_frame.pack(fill=tk.BOTH, expand=True)
+
+        ttk.Label(progress_frame, text="批量生成语音中...",
+                  font=("Arial", 10, "bold")).pack(pady=(0, 10))
+
+        self.batch_progress_status = ttk.Label(progress_frame, text=f"准备生成 0/{len(lines)}")
+        self.batch_progress_status.pack(pady=5)
+
+        self.batch_progress_var = tk.DoubleVar()
+        self.batch_progress_bar = ttk.Progressbar(progress_frame,
+                                                  variable=self.batch_progress_var,
+                                                  maximum=len(lines))
+        self.batch_progress_bar.pack(fill=tk.X, pady=10)
+
+        # 启动批量生成
+        self.batch_generate_lines(progress_window, lines, 0)
+
+    def batch_generate_lines(self, progress_window, lines, current_index):
+        """递归生成台词语音"""
+        if current_index >= len(lines):
+            progress_window.destroy()
+            messagebox.showinfo("完成", f"批量生成完成！共生成 {len(lines)} 条语音")
+            self.load_lines()
+            return
+
+        line = lines[current_index]
+        self.batch_progress_status.config(text=f"正在生成: {current_index + 1}/{len(lines)}")
+        self.batch_progress_var.set(current_index)
+
+        def generate_single():
+            try:
+                # 获取角色和音色信息
+                role = self.role_controller.get_role(line.role_id)
+                if not role or not role.default_voice_id:
+                    print(f"角色 {line.role_id} 未绑定音色，跳过")
+                    self.after(0, lambda: self.batch_generate_lines(progress_window, lines, current_index + 1))
+                    return
+
+                voice = self.app_controller.voice_controller.get_voice(role.default_voice_id)
+                if not voice:
+                    print(f"音色 {role.default_voice_id} 不存在，跳过")
+                    self.after(0, lambda: self.batch_generate_lines(progress_window, lines, current_index + 1))
+                    return
+
+                # 获取情绪和强度
+                emotion_name = self.get_emotion_name(line.emotion_id)
+                strength_name = self.get_strength_name(line.strength_id)
+
+                # 生成情绪向量
+                emo_vector = emotion_text_to_vector(emotion_name, strength_name)
+
+                # 调用LineService生成音频
+                success = self.line_controller.line_service.generate_audio(
+                    reference_path=voice.reference_path,
+                    tts_provider_id=voice.tts_provider_id,
+                    content=line.text_content,
+                    emo_text=None,
+                    emo_vector=emo_vector,
+                    save_path=line.audio_path
+                )
+
+                if success:
+                    self.line_controller.update_line(line.id, **{"status": "done"})
+                else:
+                    self.line_controller.update_line(line.id, **{"status": "failed"})
+
+                # 继续下一个
+                self.after(0, lambda: self.batch_generate_lines(progress_window, lines, current_index + 1))
+
+            except Exception as e:
+                print(f"生成台词 {line.id} 失败: {e}")
+                self.line_controller.update_line(line.id, **{"status": "failed"})
+                self.after(0, lambda: self.batch_generate_lines(progress_window, lines, current_index + 1))
+                logging.error(traceback.format_exc())
+
+        # 在新线程中生成
+        thread = threading.Thread(target=generate_single, daemon=True)
+        thread.start()
+
+    # 以下其他方法保持不变...
     def load_chapters(self):
         """加载章节列表"""
         try:
@@ -278,15 +423,47 @@ class ChapterEditor(ttk.Frame):
 
             for line in lines:
                 role_name = self.get_role_name(line.role_id)
+                voice_name = self.get_role_voice_name(line.role_id)  # 获取角色绑定的音色名称
+
+                # 转换状态显示
+                status_display = self.get_status_display(line.status)
+
                 self.lines_tree.insert('', tk.END, values=(
-                    line.id,
+                    line.id,  # 仍然存储ID，但列宽为0不显示
                     line.line_order or '',
                     role_name,
+                    voice_name,  # 显示绑定音色
                     line.text_content[:30] + "..." if len(line.text_content) > 30 else line.text_content,
-                    line.status or 'pending'
+                    status_display  # 使用转换后的状态显示
                 ))
         except BusinessException as e:
             messagebox.showerror("错误", e.message)
+
+    def get_status_display(self, status):
+        """转换状态显示"""
+        status_map = {
+            'pending': '未生成',
+            'processing': '生成中',
+            'done': '已生成',
+            'failed': '生成失败'
+        }
+        return status_map.get(status, '未知')
+
+    def get_role_voice_name(self, role_id):
+        """获取角色绑定的音色名称"""
+        if not role_id:
+            return "未绑定"
+
+        try:
+            role = self.role_controller.get_role(role_id)
+            if role and role.default_voice_id:
+                # 这里需要调用音色控制器获取音色信息
+                # 假设有 voice_controller 可以获取音色
+                voice = self.app_controller.voice_controller.get_voice(role.default_voice_id)
+                return voice.name if voice else "音色不存在"
+            return "未绑定"
+        except:
+            return "未知"
 
     def on_line_select(self, event):
         """台词选择事件"""
@@ -311,8 +488,38 @@ class ChapterEditor(ttk.Frame):
                 # 设置情绪和强度
                 self.emotion_var.set(self.get_emotion_name(line.emotion_id))
                 self.strength_var.set(self.get_strength_name(line.strength_id))
+
+                # 更新播放按钮状态
+                self.update_play_button_state(line)
         except BusinessException as e:
             messagebox.showerror("错误", e.message)
+
+    def update_play_button_state(self, line):
+        """更新播放按钮状态"""
+        if hasattr(self, 'play_button'):
+            if line.status == 'done' and line.audio_path and os.path.exists(line.audio_path):
+                self.play_button.config(state=tk.NORMAL)
+            else:
+                self.play_button.config(state=tk.DISABLED)
+
+    def on_role_selected(self, event):
+        """角色选择事件，更新音色显示"""
+        role_name = self.role_var.get().strip()
+        if role_name:
+            try:
+                # 查找角色
+                roles = self.role_controller.get_roles_by_project(self.project.id)
+                role = next((r for r in roles if r.name == role_name), None)
+
+                if role and role.default_voice_id:
+                    # 获取音色信息
+                    voice = self.app_controller.voice_controller.get_voice(role.default_voice_id)
+                    self.voice_var.set(voice.name if voice else "音色不存在")
+                else:
+                    self.voice_var.set("未绑定")
+            except Exception as e:
+                self.voice_var.set("未知")
+                print(f"获取音色信息失败: {e}")
 
     def add_chapter(self):
         """添加章节"""
@@ -521,7 +728,6 @@ class ChapterEditor(ttk.Frame):
         progress_window.destroy()
         messagebox.showerror("错误", f"导入解析失败: {error_msg}")
 
-
     def clear_content(self):
         """清空内容"""
         self.current_chapter_id = None
@@ -538,7 +744,6 @@ class ChapterEditor(ttk.Frame):
         self.emotion_var.set('')
         self.strength_var.set('')
 
-    # 其他方法保持不变...
     def add_line(self):
         """添加台词"""
         if not self.current_chapter_id:
@@ -623,25 +828,117 @@ class ChapterEditor(ttk.Frame):
             return
 
         item = self.lines_tree.item(selection[0])
-        line_id = item['values'][0]
+        line_id = item['values'][0]  # 获取隐藏的ID
 
         try:
-            # 这里实现单个台词的语音生成
-            messagebox.showinfo("提示", "语音生成功能待实现")
+            # 获取台词信息
+            line = self.line_controller.get_line(line_id)
+            if not line:
+                messagebox.showerror("错误", "台词不存在")
+                return
+
+            # 检查角色是否绑定音色
+            if not line.role_id:
+                messagebox.showwarning("警告", "该台词未绑定角色")
+                return
+
+            role = self.role_controller.get_role(line.role_id)
+            if not role or not role.default_voice_id:
+                messagebox.showwarning("警告", f"角色 '{self.get_role_name(line.role_id)}' 未绑定音色")
+                return
+
+            # 显示进度对话框
+            progress_window = tk.Toplevel(self)
+            progress_window.title("生成语音")
+            progress_window.geometry("400x120")
+            progress_window.transient(self)
+            progress_window.grab_set()
+            progress_window.resizable(False, False)
+
+            progress_frame = ttk.Frame(progress_window, padding="20")
+            progress_frame.pack(fill=tk.BOTH, expand=True)
+
+            ttk.Label(progress_frame, text="正在生成语音，请稍候...",
+                      font=("Arial", 10, "bold")).pack(pady=(0, 10))
+
+            progress_status = ttk.Label(progress_frame, text="准备中...")
+            progress_status.pack(pady=5)
+
+            progress_var = tk.DoubleVar()
+            progress_bar = ttk.Progressbar(progress_frame, variable=progress_var,
+                                           maximum=100, mode='indeterminate')
+            progress_bar.pack(fill=tk.X, pady=10)
+            progress_bar.start()
+
+            def run_generate():
+                try:
+                    # 更新状态为处理中
+                    self.line_controller.update_line(line_id, **{"status": "processing"})
+
+                    # 获取音色信息
+                    voice = self.app_controller.voice_controller.get_voice(role.default_voice_id)
+                    if not voice:
+                        raise BusinessException("音色不存在")
+
+                    # 获取TTS提供商
+                    tts_provider_id = voice.tts_provider_id
+
+                    # 获取情绪和强度文本
+                    emotion_text = self.emotion_var.get() or "平静"
+                    strength_text = self.strength_var.get() or "中等"
+
+                    # 使用现有的情绪向量转换函数
+                    emo_vector = emotion_text_to_vector(emotion_text, strength_text)
+
+                    print(f"调试信息: 情绪={emotion_text}, 强度={strength_text}, 向量={emo_vector}")
+
+                    # 调用LineService生成音频
+                    success = self.line_controller.line_service.generate_audio(
+                        reference_path=voice.reference_path,
+                        tts_provider_id=tts_provider_id,
+                        content=line.text_content,
+                        emo_text=None,  # 使用向量，不需要文本
+                        emo_vector=emo_vector,  # 传入正确的8维向量
+                        save_path=line.audio_path
+                    )
+
+                    if success:
+                        self.line_controller.update_line(line_id, **{"status": "done"})
+                        self.after(0, lambda: self.on_generate_complete(progress_window, line_id))
+                    else:
+                        self.line_controller.update_line(line_id, **{"status": "failed"})
+                        self.after(0, lambda: self.on_generate_error(progress_window, "生成失败"))
+
+                except Exception as e:
+                    self.line_controller.update_line(line_id, **{"status": "failed"})
+                    self.after(0, lambda: self.on_generate_error(progress_window, str(e)))
+                    logging.error(traceback.format_exc())
+
+            # 启动线程
+            thread = threading.Thread(target=run_generate, daemon=True)
+            thread.start()
+
         except Exception as e:
             messagebox.showerror("错误", f"生成失败: {str(e)}")
 
-    def batch_generate(self):
-        """批量生成语音"""
-        if not self.current_chapter_id:
-            messagebox.showwarning("警告", "请先选择章节")
-            return
+    def on_generate_complete(self, progress_window, line_id):
+        """生成完成回调"""
+        progress_window.destroy()
+        messagebox.showinfo("成功", "语音生成完成")
+        self.load_lines()  # 刷新列表
 
+        # 更新播放按钮状态
         try:
-            # 这里实现批量语音生成
-            messagebox.showinfo("提示", "批量生成功能待实现")
-        except Exception as e:
-            messagebox.showerror("错误", f"批量生成失败: {str(e)}")
+            line = self.line_controller.get_line(line_id)
+            if line:
+                self.update_play_button_state(line)
+        except:
+            pass  # 忽略更新失败
+
+    def on_generate_error(self, progress_window, error_msg):
+        """生成错误回调"""
+        progress_window.destroy()
+        messagebox.showerror("错误", f"语音生成失败: {error_msg}")
 
     def play_audio(self):
         """播放音频"""
@@ -650,10 +947,109 @@ class ChapterEditor(ttk.Frame):
             return
 
         try:
-            # 这里实现音频播放
-            messagebox.showinfo("提示", "音频播放功能待实现")
+            # 获取台词信息
+            line = self.line_controller.get_line(self.current_line_id)
+            if not line:
+                messagebox.showerror("错误", "台词不存在")
+                return
+
+            # 检查状态
+            if line.status != 'done':
+                messagebox.showwarning("警告", "该台词语音尚未生成完成")
+                return
+
+            # 检查音频文件是否存在
+            if not line.audio_path:
+                messagebox.showwarning("警告", "音频文件路径不存在")
+                return
+
+            if not os.path.exists(line.audio_path):
+                messagebox.showwarning("警告", f"音频文件不存在: {line.audio_path}")
+                return
+
+            # 显示播放状态窗口
+            play_window = tk.Toplevel(self)
+            play_window.title("播放音频")
+            play_window.geometry("350x120")
+            play_window.transient(self)
+            play_window.resizable(False, False)
+
+            play_frame = ttk.Frame(play_window, padding="20")
+            play_frame.pack(fill=tk.BOTH, expand=True)
+
+            # 文件名显示
+            audio_filename = os.path.basename(line.audio_path)
+            filename_label = ttk.Label(play_frame, text=f"正在播放: {audio_filename}",
+                                       font=("Arial", 10, "bold"))
+            filename_label.pack(pady=(0, 10))
+
+            # 播放进度显示
+            progress_label = ttk.Label(play_frame, text="准备播放...")
+            progress_label.pack(pady=5)
+
+            # 停止按钮
+            stop_button = ttk.Button(play_frame, text="停止播放",
+                                     command=lambda: self.stop_audio_playback(play_window))
+            stop_button.pack(pady=10)
+
+            # 在新线程中播放音频
+            def play_in_thread():
+                try:
+                    # 播放音频
+                    success = audio_player.play_audio(line.audio_path)
+
+                    if success:
+                        # 更新播放状态
+                        self.after(0, lambda: progress_label.config(text="播放中..."))
+
+                        # 监控播放进度
+                        while audio_player.is_playing and not audio_player.stop_playback:
+                            position = audio_player.get_position()
+                            duration = audio_player.get_duration()
+
+                            if duration > 0:
+                                progress_text = f"播放进度: {position:.1f}s / {duration:.1f}s"
+                                self.after(0, lambda: progress_label.config(text=progress_text))
+
+                            time.sleep(0.5)  # 每0.5秒更新一次
+
+                        # 播放完成
+                        self.after(0, lambda: self.on_playback_complete(play_window, progress_label))
+                    else:
+                        self.after(0, lambda: self.on_playback_error(play_window, "播放失败"))
+
+                except Exception as e:
+                    self.after(0, lambda: self.on_playback_error(play_window, str(e)))
+                    logging.error(f"音频播放线程错误: {traceback.format_exc()}")
+
+            # 启动播放线程
+            play_thread = threading.Thread(target=play_in_thread, daemon=True)
+            play_thread.start()
+
         except Exception as e:
             messagebox.showerror("错误", f"播放失败: {str(e)}")
+            logging.error(f"音频播放失败: {traceback.format_exc()}")
+
+    def stop_audio_playback(self, play_window=None):
+        """停止音频播放"""
+        try:
+            audio_player.stop_audio()
+            if play_window:
+                play_window.destroy()
+            messagebox.showinfo("提示", "播放已停止")
+        except Exception as e:
+            messagebox.showerror("错误", f"停止播放失败: {str(e)}")
+
+    def on_playback_complete(self, play_window, progress_label):
+        """播放完成回调"""
+        progress_label.config(text="播放完成")
+        # 2秒后自动关闭窗口
+        play_window.after(2000, play_window.destroy)
+
+    def on_playback_error(self, play_window, error_msg):
+        """播放错误回调"""
+        play_window.destroy()
+        messagebox.showerror("错误", f"播放失败: {error_msg}")
 
     def edit_audio(self):
         """编辑音频"""

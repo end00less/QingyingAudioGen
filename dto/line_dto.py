@@ -24,6 +24,9 @@ class LineAudioProcessDTO(BaseModel):
     silence_sec: Optional[float] = 0.0
     current_ms: Optional[int] = None
 
+    # delete: 删除区间, keep: 保留区间
+    crop_mode: Optional[str] = "delete"
+
 class LineCreateDTO(BaseModel):
     chapter_id: int
     role_id:Optional[int] = None
