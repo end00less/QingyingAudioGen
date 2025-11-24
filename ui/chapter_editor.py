@@ -941,7 +941,7 @@ class ChapterEditor(ttk.Frame):
         messagebox.showerror("错误", f"语音生成失败: {error_msg}")
 
     def play_audio(self):
-        """播放音频"""
+        """播放音频 - 直接播放，不弹窗"""
         if not self.current_line_id:
             messagebox.showwarning("警告", "请先选择台词")
             return
@@ -967,68 +967,85 @@ class ChapterEditor(ttk.Frame):
                 messagebox.showwarning("警告", f"音频文件不存在: {line.audio_path}")
                 return
 
-            # 显示播放状态窗口
-            play_window = tk.Toplevel(self)
-            play_window.title("播放音频")
-            play_window.geometry("350x120")
-            play_window.transient(self)
-            play_window.resizable(False, False)
+            # 如果正在播放，先停止
+            if audio_player.is_playing:
+                audio_player.stop_audio()
+                # 稍等片刻再开始新的播放
+                time.sleep(0.1)
 
-            play_frame = ttk.Frame(play_window, padding="20")
-            play_frame.pack(fill=tk.BOTH, expand=True)
+            # 直接播放音频
+            success = audio_player.play_audio(line.audio_path)
 
-            # 文件名显示
-            audio_filename = os.path.basename(line.audio_path)
-            filename_label = ttk.Label(play_frame, text=f"正在播放: {audio_filename}",
-                                       font=("Arial", 10, "bold"))
-            filename_label.pack(pady=(0, 10))
+            if success:
+                # 更新播放按钮文本为"停止播放"
+                if hasattr(self, 'play_button'):
+                    self.play_button.config(text="停止播放", command=self.stop_audio)
 
-            # 播放进度显示
-            progress_label = ttk.Label(play_frame, text="准备播放...")
-            progress_label.pack(pady=5)
+                # 可选：在状态栏显示播放信息
+                audio_filename = os.path.basename(line.audio_path)
+                self.chapter_status_var.set(f"正在播放: {audio_filename}")
 
-            # 停止按钮
-            stop_button = ttk.Button(play_frame, text="停止播放",
-                                     command=lambda: self.stop_audio_playback(play_window))
-            stop_button.pack(pady=10)
-
-            # 在新线程中播放音频
-            def play_in_thread():
-                try:
-                    # 播放音频
-                    success = audio_player.play_audio(line.audio_path)
-
-                    if success:
-                        # 更新播放状态
-                        self.after(0, lambda: progress_label.config(text="播放中..."))
-
-                        # 监控播放进度
-                        while audio_player.is_playing and not audio_player.stop_playback:
-                            position = audio_player.get_position()
-                            duration = audio_player.get_duration()
-
-                            if duration > 0:
-                                progress_text = f"播放进度: {position:.1f}s / {duration:.1f}s"
-                                self.after(0, lambda: progress_label.config(text=progress_text))
-
-                            time.sleep(0.5)  # 每0.5秒更新一次
-
-                        # 播放完成
-                        self.after(0, lambda: self.on_playback_complete(play_window, progress_label))
-                    else:
-                        self.after(0, lambda: self.on_playback_error(play_window, "播放失败"))
-
-                except Exception as e:
-                    self.after(0, lambda: self.on_playback_error(play_window, str(e)))
-                    logging.error(f"音频播放线程错误: {traceback.format_exc()}")
-
-            # 启动播放线程
-            play_thread = threading.Thread(target=play_in_thread, daemon=True)
-            play_thread.start()
+                # 启动进度监控（可选）
+                self.monitor_playback_progress(line.audio_path)
+            else:
+                messagebox.showerror("错误", "音频播放失败")
 
         except Exception as e:
             messagebox.showerror("错误", f"播放失败: {str(e)}")
             logging.error(f"音频播放失败: {traceback.format_exc()}")
+
+    def stop_audio(self):
+        """停止音频播放"""
+        try:
+            audio_player.stop_audio()
+
+            # 恢复播放按钮状态
+            if hasattr(self, 'play_button'):
+                self.play_button.config(text="播放音频", command=self.play_audio)
+
+            # 清除状态栏信息
+            self.chapter_status_var.set("播放已停止")
+
+        except Exception as e:
+            messagebox.showerror("错误", f"停止播放失败: {str(e)}")
+
+    def monitor_playback_progress(self, audio_path):
+        """监控播放进度（可选功能）"""
+
+        def update_progress():
+            if audio_player.is_playing:
+                position = audio_player.get_position()
+                duration = audio_player.get_duration()
+
+                if duration > 0:
+                    progress_text = f"播放中: {position:.1f}s / {duration:.1f}s"
+                    self.chapter_status_var.set(progress_text)
+
+                    # 继续监控
+                    self.after(500, update_progress)  # 每0.5秒更新一次
+                else:
+                    # 播放结束
+                    self.after(1000, self.on_playback_finished)
+            else:
+                # 播放结束
+                self.after(100, self.on_playback_finished)
+
+        # 开始监控
+        self.after(500, update_progress)
+
+    def on_playback_finished(self):
+        """播放完成回调"""
+        # 恢复播放按钮状态
+        if hasattr(self, 'play_button'):
+            self.play_button.config(text="播放音频", command=self.play_audio)
+
+        # 清除状态栏信息
+        if self.current_chapter_id:
+            chapter = self.chapter_controller.get_chapter(self.current_chapter_id)
+            if chapter:
+                self.chapter_status_var.set(f"当前章节: {chapter.title}")
+        else:
+            self.chapter_status_var.set("请选择章节")
 
     def stop_audio_playback(self, play_window=None):
         """停止音频播放"""
@@ -1052,14 +1069,30 @@ class ChapterEditor(ttk.Frame):
         messagebox.showerror("错误", f"播放失败: {error_msg}")
 
     def edit_audio(self):
-        """编辑音频"""
+        """编辑音频 - 支持任意位置裁剪"""
         if not self.current_line_id:
             messagebox.showwarning("警告", "请先选择台词")
             return
 
         try:
-            # 这里实现音频编辑
-            messagebox.showinfo("提示", "音频编辑功能待实现")
+            # 获取台词信息
+            line = self.line_controller.get_line(self.current_line_id)
+            if not line:
+                messagebox.showerror("错误", "台词不存在")
+                return
+
+            # 检查音频文件是否存在
+            if not line.audio_path or not os.path.exists(line.audio_path):
+                messagebox.showwarning("警告", "音频文件不存在，请先生成语音")
+                return
+
+            # 打开音频编辑对话框
+            from app.ui.audio_edit_dialog import AudioEditDialog
+            dialog = AudioEditDialog(self, self.line_controller, self.current_line_id)
+
+            # 等待对话框关闭
+            self.wait_window(dialog.dialog)
+
         except Exception as e:
             messagebox.showerror("错误", f"编辑失败: {str(e)}")
 

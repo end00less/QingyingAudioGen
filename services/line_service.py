@@ -478,7 +478,7 @@ class LineService:
         os.replace(tmp_path, target_path)
         return target_path
 
-    def process_audio(self, line_id, dto:LineAudioProcessDTO):
+    def process_audio00(self, line_id, dto:LineAudioProcessDTO):
         line = self.get_line(line_id)
         if line:
         #     读取音频文件
@@ -516,6 +516,121 @@ class LineService:
             return True
 
         else:
+            return False
+
+    def process_audio(self, line_id, dto: LineAudioProcessDTO):
+        """处理音频 - 支持任意位置裁剪"""
+        line = self.get_line(line_id)
+        if not line or not line.audio_path:
+            return False
+
+        try:
+            # 如果有裁剪设置，使用ffmpeg进行精确裁剪
+            if dto.start_ms is not None and dto.end_ms is not None and dto.end_ms > dto.start_ms:
+                print(f"执行裁剪: 模式={dto.crop_mode}, 区间={dto.start_ms}-{dto.end_ms}ms")
+
+                if dto.crop_mode == "keep":
+                    # 保留模式：只保留选定区间
+                    return self._crop_keep_region(line.audio_path, dto)
+                else:
+                    # 删除模式：删除选定区间（默认）
+                    return self._crop_delete_region(line.audio_path, dto)
+            else:
+                # 无裁剪，只进行其他处理
+                processor = AudioProcessor(line.audio_path)
+
+                # 插入静音
+                if dto.current_ms is not None and dto.silence_sec is not None and dto.silence_sec != 0:
+                    print(f"插入静音: 位置{dto.current_ms}ms, 时长{dto.silence_sec}s")
+                    processor.insert_silence(dto.current_ms, dto.silence_sec)
+
+                # 末尾静音/裁剪
+                elif dto.current_ms is None and dto.silence_sec is not None and dto.silence_sec != 0:
+                    if dto.silence_sec > 0:
+                        print(f"添加末尾静音: {dto.silence_sec}s")
+                        processor.append_silence(dto.silence_sec)
+                    else:
+                        print(f"裁剪末尾: {-dto.silence_sec}s")
+                        # 这里需要实现trim_end方法
+
+                # 音量和变速
+                if dto.speed != 1.0:
+                    print(f"变速: {dto.speed}x")
+                    processor.change_speed(dto.speed)
+                if dto.volume != 1.0:
+                    print(f"调整音量: {dto.volume}x")
+                    processor.change_volume(dto.volume)
+
+                print("音频处理完成")
+                return True
+
+        except Exception as e:
+            print(f"音频处理失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
+    def _crop_delete_region(self, audio_path, dto):
+        """删除选定区间"""
+        try:
+            return self.process_audio_ffmpeg_cut(
+                audio_path=audio_path,
+                speed=dto.speed,
+                volume=dto.volume,
+                start_ms=dto.start_ms,
+                end_ms=dto.end_ms,
+                silence_sec=dto.silence_sec,
+                out_path=audio_path  # 覆盖原文件
+            )
+        except Exception as e:
+            print(f"删除区间裁剪失败: {e}")
+            return False
+
+    def _crop_keep_region(self, audio_path, dto):
+        """保留选定区间（删除其他部分）"""
+        try:
+            # 使用ffmpeg直接提取选定区间
+            ffmpeg_path = getFfmpegPath()
+
+            # 创建临时文件
+            import tempfile
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
+                temp_path = tmp.name
+
+            # 构建ffmpeg命令：只保留选定区间
+            cmd = [
+                ffmpeg_path, "-y",
+                "-i", audio_path,
+                "-ss", str(dto.start_ms / 1000.0),
+                "-to", str(dto.end_ms / 1000.0),
+                "-c", "copy",  # 直接复制，不重新编码
+                temp_path
+            ]
+
+            # 执行ffmpeg
+            result = subprocess.run(cmd, capture_output=True, text=True,
+                                    creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0)
+
+            if result.returncode == 0 and os.path.exists(temp_path):
+                # 替换原文件
+                os.replace(temp_path, audio_path)
+
+                # 如果需要，再进行其他处理（变速、音量等）
+                if dto.speed != 1.0 or dto.volume != 1.0:
+                    processor = AudioProcessor(audio_path)
+                    if dto.speed != 1.0:
+                        processor.change_speed(dto.speed)
+                    if dto.volume != 1.0:
+                        processor.change_volume(dto.volume)
+
+                print("保留区间裁剪完成")
+                return True
+            else:
+                print(f"ffmpeg执行失败: {result.stderr}")
+                return False
+
+        except Exception as e:
+            print(f"保留区间裁剪失败: {e}")
             return False
 
     # 导出音频,合并音频，并且导出字幕
