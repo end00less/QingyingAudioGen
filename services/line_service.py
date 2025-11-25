@@ -634,38 +634,55 @@ class LineService:
             return False
 
     # 导出音频,合并音频，并且导出字幕
-    def concat_wav_files(self,paths, out_path, verify=True, block_frames=262144):
+    def concat_wav_files(self, paths, out_path, verify=True, block_frames=262144):
         """
         按顺序把若干 WAV 合并到 out_path。
-        假设：采样率与声道一致（如需更稳，可保留 verify=True 做轻校验）。
         """
+        print(f"开始合并音频文件，共 {len(paths)} 个文件")
+        print(f"输出路径: {out_path}")
+
         assert paths and len(paths) >= 1, "至少提供一个文件路径"
         os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
 
         # 以首文件格式为准
         info0 = sf.info(paths[0])
         sr, ch, subtype = info0.samplerate, info0.channels, info0.subtype or "PCM_16"
+        print(f"首文件信息: sr={sr}, ch={ch}, subtype={subtype}")
 
         # 可选校验
         if verify:
-            for p in paths[1:]:
-                info = sf.info(p)
-                if info.samplerate != sr or info.channels != ch:
-                    raise ValueError(
-                        f"格式不一致：{p} (sr={info.samplerate}, ch={info.channels}) vs 首文件 (sr={sr}, ch={ch})")
+            for i, p in enumerate(paths[1:]):
+                try:
+                    info = sf.info(p)
+                    if info.samplerate != sr or info.channels != ch:
+                        print(f"警告: 文件 {i + 1} 格式不一致: {p} (sr={info.samplerate}, ch={info.channels})")
+                except Exception as e:
+                    print(f"检查文件 {p} 失败: {e}")
 
         # 流式写入
-        with sf.SoundFile(out_path, mode='w', samplerate=sr, channels=ch, format='WAV', subtype=subtype) as fout:
-            for p in paths:
-                with sf.SoundFile(p, mode='r') as fin:
-                    if verify and (fin.samplerate != sr or fin.channels != ch):
-                        raise ValueError(f"参数不一致：{p}")
-                    while True:
-                        block = fin.read(block_frames, dtype='float32', always_2d=True)
-                        if len(block) == 0:
-                            break
-                        fout.write(block.astype(np.float32, copy=False))
-        return out_path
+        try:
+            with sf.SoundFile(out_path, mode='w', samplerate=sr, channels=ch, format='WAV', subtype=subtype) as fout:
+                for i, p in enumerate(paths):
+                    print(f"正在处理第 {i + 1}/{len(paths)} 个文件: {p}")
+                    try:
+                        with sf.SoundFile(p, mode='r') as fin:
+                            if verify and (fin.samplerate != sr or fin.channels != ch):
+                                print(f"参数不一致：{p}")
+                            while True:
+                                block = fin.read(block_frames, dtype='float32', always_2d=True)
+                                if len(block) == 0:
+                                    break
+                                fout.write(block.astype(np.float32, copy=False))
+                        print(f"第 {i + 1} 个文件处理完成")
+                    except Exception as e:
+                        print(f"处理文件 {p} 失败: {e}")
+                        continue
+
+            print(f"音频合并完成: {out_path}")
+            return out_path
+        except Exception as e:
+            print(f"合并音频失败: {e}")
+            raise
 
 
 
@@ -695,41 +712,144 @@ class LineService:
         wb.save(file_path)
         return file_path
 
-    def export_audio(self, chapter_id,single=False):
-        # 拿到所有的台词
-        lines = self.repository.get_all(chapter_id)
+    def export_audio(self, chapter_id, single=False):
+        """导出音频 - 添加字幕生成的异常处理"""
+        try:
+            print(f"=== 开始导出章节 {chapter_id} 的音频 ===")
 
-        paths = [line.audio_path for line in lines]
-        if len(paths) > 0:
-            # 把paths[0]的path去掉后面的文件名，得到文件夹路径
+            # 拿到所有的台词
+            lines = self.repository.get_all(chapter_id)
+            print(f"数据库查询完成，找到 {len(lines)} 条台词")
+
+            # 检查每条台词的音频文件
+            valid_lines = []
+            for i, line in enumerate(lines):
+                if line.audio_path and os.path.exists(line.audio_path):
+                    valid_lines.append(line)
+                    print(f"有效音频 {i + 1}: {line.audio_path}")
+                else:
+                    print(f"无效音频 {i + 1}: {line.audio_path} (文件不存在)")
+
+            paths = [line.audio_path for line in valid_lines]
+            print(f"有效的音频文件: {len(paths)} 个")
+
+            if len(paths) == 0:
+                print("!!! 没有找到有效的音频文件，导出终止 !!!")
+                return False
+
+            # 创建输出目录
             output_dir_path = os.path.join(os.path.dirname(paths[0]), "result")
-            # 不存在就创建
+            print(f"输出目录: {output_dir_path}")
             os.makedirs(output_dir_path, exist_ok=True)
-            # 放到result目录下，名字叫项目名称_章节名称.wav
+
+            # 合并音频
             output_path = os.path.join(output_dir_path, "result.wav")
-            self.concat_wav_files(paths, output_path)
-            # 生成字幕
+            print(f"开始合并音频到: {output_path}")
+
+            try:
+                self.concat_wav_files(paths, output_path)
+                print("✓ 音频合并完成")
+            except Exception as e:
+                print(f"!!! 音频合并失败: {e} !!!")
+                return False
+
+            # 生成字幕 - 添加超时和异常处理
             output_subtitle_path = os.path.join(output_dir_path, "result.srt")
-            subtitle_engine.generate_subtitle(output_path,output_subtitle_path)
+            print(f"开始生成字幕: {output_subtitle_path}")
 
+            try:
+                # 添加超时控制
+                import threading
+                subtitle_result = [None]
+                subtitle_error = [None]
 
+                def generate_subtitle_with_timeout():
+                    try:
+                        subtitle_engine.generate_subtitle(output_path, output_subtitle_path)
+                        subtitle_result[0] = True
+                    except Exception as e:
+                        subtitle_error[0] = e
+
+                # 启动字幕生成线程
+                subtitle_thread = threading.Thread(target=generate_subtitle_with_timeout, daemon=True)
+                subtitle_thread.start()
+                subtitle_thread.join(timeout=120)  # 2分钟超时
+
+                if subtitle_thread.is_alive():
+                    print("!!! 字幕生成超时 !!!")
+                    # 强制终止线程（注意：这可能会有些副作用）
+                    return False
+                elif subtitle_error[0] is not None:
+                    print(f"!!! 字幕生成失败: {subtitle_error[0]} !!!")
+                    return False
+                else:
+                    print("✓ 字幕生成完成")
+
+            except Exception as e:
+                print(f"!!! 字幕生成过程异常: {e} !!!")
+                # 字幕生成失败不影响继续执行其他导出步骤
+
+            # 单句字幕生成 - 同样添加异常处理
             if single:
-                # 生成所有的单条字幕
+                print("开始生成单句字幕...")
                 subtitle_dir_path = os.path.join(os.path.dirname(paths[0]), "subtitles")
+                print(f"单句字幕目录: {subtitle_dir_path}")
+
                 # 先清空这个文件夹
                 shutil.rmtree(subtitle_dir_path, ignore_errors=True)
                 os.makedirs(subtitle_dir_path, exist_ok=True)
-                for line in lines:
+
+                success_count = 0
+                for i, line in enumerate(valid_lines):
                     path = line.audio_path
                     base_name = os.path.splitext(os.path.basename(path))[0]
                     subtitle_path = os.path.join(subtitle_dir_path, base_name + ".srt")
-                    subtitle_engine.generate_subtitle(path,subtitle_path)
-                    #     将subtitle_path写进line.subtitle_path
-                    self.repository.update(line.id,{"subtitle_path":subtitle_path})
-            # 导出所有数据
-            self.export_lines_to_excel(lines, os.path.join(output_dir_path, "all_lines.xlsx"))
+                    print(f"生成单句字幕 {i + 1}/{len(valid_lines)}: {subtitle_path}")
+
+                    try:
+                        # 单句字幕也添加超时控制
+                        def generate_single_subtitle():
+                            try:
+                                subtitle_engine.generate_subtitle(path, subtitle_path)
+                                return True
+                            except Exception as e:
+                                print(f"单句字幕生成失败 {path}: {e}")
+                                return False
+
+                        # 使用线程池或直接调用，但添加超时
+                        import concurrent.futures
+                        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                            future = executor.submit(generate_single_subtitle)
+                            try:
+                                result = future.result(timeout=60)  # 单句字幕1分钟超时
+                                if result:
+                                    self.repository.update(line.id, {"subtitle_path": subtitle_path})
+                                    success_count += 1
+                                    print(f"✓ 单句字幕生成成功")
+                            except concurrent.futures.TimeoutError:
+                                print(f"!!! 单句字幕生成超时: {path} !!!")
+
+                    except Exception as e:
+                        print(f"!!! 单句字幕处理异常: {e} !!!")
+
+                print(f"单句字幕生成完成: {success_count}/{len(valid_lines)} 成功")
+
+            # 导出Excel
+            excel_path = os.path.join(output_dir_path, "all_lines.xlsx")
+            print(f"开始导出Excel: {excel_path}")
+            try:
+                self.export_lines_to_excel(lines, excel_path)
+                print("✓ Excel导出完成")
+            except Exception as e:
+                print(f"!!! Excel导出失败: {e} !!!")
+
+            print("=== 所有导出任务完成 ===")
             return True
-        else:
+
+        except Exception as e:
+            print(f"!!! 导出音频过程中发生错误: {e} !!!")
+            import traceback
+            traceback.print_exc()
             return False
 
 

@@ -413,27 +413,28 @@ class MainWindow:
 
             # 更新章节数和角色数
             try:
-                chapter_count = self.app_controller.chapter_controller.get_chapter_count(self.current_project.id)
-                # 获取角色数量 - 需要确保role_controller有get_role_count方法
-                # 如果没有，可以使用 len(self.app_controller.role_controller.get_roles_by_project(self.current_project.id))
+                # 获取章节数
+                chapters = self.app_controller.chapter_controller.get_chapters_by_project(self.current_project.id)
+                chapter_count = len(chapters) if chapters else 0
+
+                # 获取角色数
                 roles = self.app_controller.role_controller.get_roles_by_project(self.current_project.id)
-                role_count = len(roles)
+                role_count = len(roles) if roles else 0
 
                 self.chapter_count_var.set(f"章节:{chapter_count}")
                 self.character_count_var.set(f"角色:{role_count}")
-            except:
+
+                if self.is_debug:
+                    print(f"更新项目信息: 章节={chapter_count}, 角色={role_count}")
+
+            except Exception as e:
+                print(f"更新项目信息失败: {e}")
                 self.chapter_count_var.set("章节:0")
                 self.character_count_var.set("角色:0")
-
-            # 如果当前在配音模块的角色库标签页，刷新内容
-            if (self.current_main_module == 'dubbing' and
-                    hasattr(self, 'dubbing_notebook') and
-                    self.dubbing_notebook.index(self.dubbing_notebook.select()) == 1):  # 角色库标签页
-
-                # 强制重新创建角色库界面
-                if hasattr(self, 'role_editor'):
-                    delattr(self, 'role_editor')
-                self.setup_role_library()
+        else:
+            self.project_name_var.set("无项目")
+            self.chapter_count_var.set("章节:0")
+            self.character_count_var.set("角色:0")
 
     def load_projects(self):
         """加载项目列表"""

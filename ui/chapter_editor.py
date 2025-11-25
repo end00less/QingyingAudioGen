@@ -1,5 +1,6 @@
 # ui/chapter_editor.py - 修复批量生成方法
 import logging
+import sys
 import time
 import tkinter as tk
 import traceback
@@ -96,12 +97,12 @@ class ChapterEditor(ttk.Frame):
         content_paned.pack(fill=tk.BOTH, expand=True)
 
         # 上半部分：章节内容
-        chapter_frame = ttk.LabelFrame(content_paned, text="章节内容", padding="10")
+        chapter_frame = ttk.LabelFrame(content_paned, text="章节内容", padding="2")
         content_paned.add(chapter_frame, weight=1)
 
         # 下半部分：台词管理
         lines_frame = ttk.LabelFrame(content_paned, text="台词管理", padding="10")
-        content_paned.add(lines_frame, weight=8)
+        content_paned.add(lines_frame, weight=20)
 
         self.setup_chapter_content(chapter_frame)
         self.setup_lines_management(lines_frame)
@@ -143,8 +144,10 @@ class ChapterEditor(ttk.Frame):
 
         ttk.Button(toolbar_frame, text="添加台词", command=self.add_line, width=10).pack(side=tk.LEFT, padx=(0, 5))
         ttk.Button(toolbar_frame, text="删除台词", command=self.delete_line, width=10).pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Button(toolbar_frame, text="生成语音", command=self.generate_audio, width=10).pack(side=tk.LEFT, padx=(0, 5))
+        # ttk.Button(toolbar_frame, text="生成语音", command=self.generate_audio, width=10).pack(side=tk.LEFT, padx=(0, 5))
         ttk.Button(toolbar_frame, text="批量生成", command=self.batch_generate_audio, width=10).pack(side=tk.LEFT)  # 修复：改为 batch_generate_audio
+        # 添加导出按钮
+        ttk.Button(toolbar_frame, text="导出章节", command=self.export_chapter, width=10).pack(side=tk.LEFT)
 
         # 台词列表 - 隐藏ID列
         columns = ('id', 'order', 'role', 'voice', 'text_preview', 'status')
@@ -484,6 +487,8 @@ class ChapterEditor(ttk.Frame):
                 # 设置角色
                 role_name = self.get_role_name(line.role_id)
                 self.role_var.set(role_name)
+
+                self.voice_var.set(self.get_role_voice_name(line.role_id))
 
                 # 设置情绪和强度
                 self.emotion_var.set(self.get_emotion_name(line.emotion_id))
@@ -1137,3 +1142,185 @@ class ChapterEditor(ttk.Frame):
             '微弱': 1, '稍弱': 2, '中等': 3, '较强': 4, '强烈': 5
         }
         return strength_map.get(strength_name, 3)
+
+    def export_chapter(self):
+        """导出章节音频和字幕到项目根目录"""
+        if not self.current_chapter_id:
+            messagebox.showwarning("警告", "请先选择章节")
+            return
+
+        try:
+            # 获取当前章节信息
+            chapter = self.chapter_controller.get_chapter(self.current_chapter_id)
+            if not chapter:
+                messagebox.showerror("错误", "章节不存在")
+                return
+
+            # 获取章节下所有台词
+            lines = self.line_controller.get_lines_by_chapter(self.current_chapter_id)
+
+            # 过滤出已生成配音的台词
+            completed_lines = [line for line in lines if
+                               line.status == 'done' and line.audio_path and os.path.exists(line.audio_path)]
+
+            if not completed_lines:
+                messagebox.showwarning("警告", "该章节没有已生成配音的台词")
+                return
+
+            # 询问是否单独导出每句台词的字幕
+            export_single_subtitles = messagebox.askyesno(
+                "导出选项",
+                "是否单独导出每句台词的字幕文件？\n\n"
+                "是：为每句台词生成单独的.srt字幕文件\n"
+                "否：只生成合并音频的总字幕文件"
+            )
+
+            # 使用项目根目录作为导出目录
+            if not hasattr(self.project, 'project_root_path') or not self.project.project_root_path:
+                messagebox.showerror("错误", "项目根目录不存在")
+                return
+
+            project_root = self.project.project_root_path
+            if not os.path.exists(project_root):
+                messagebox.showerror("错误", f"项目根目录不存在: {project_root}")
+                return
+
+            # 检查是否需要清空目录（LineService的export_audio会在对应目录创建result文件夹）
+            # 这里我们主要检查是否需要用户确认
+            result_dir = os.path.join(project_root, str(self.project.id), str(self.current_chapter_id), "audio",
+                                      "result")
+            if os.path.exists(result_dir):
+                if not messagebox.askyesno("目录已存在",
+                                           f"导出目录已存在:\n{result_dir}\n\n是否重新导出？\n(将会覆盖原有文件)"):
+                    return  # 用户取消
+
+            # 显示进度窗口
+            progress_window = tk.Toplevel(self)
+            progress_window.title("导出章节")
+            progress_window.geometry("500x150")
+            progress_window.transient(self)
+            progress_window.grab_set()
+            progress_window.resizable(False, False)
+
+            progress_frame = ttk.Frame(progress_window, padding="20")
+            progress_frame.pack(fill=tk.BOTH, expand=True)
+
+            ttk.Label(progress_frame, text="正在导出章节内容...",
+                      font=("Arial", 10, "bold")).pack(pady=(0, 10))
+
+            self.export_progress_status = ttk.Label(progress_frame, text="准备导出中...")
+            self.export_progress_status.pack(pady=5)
+
+            self.export_progress_var = tk.DoubleVar()
+            self.export_progress_bar = ttk.Progressbar(progress_frame,
+                                                       variable=self.export_progress_var,
+                                                       maximum=100,
+                                                       mode='indeterminate')
+            self.export_progress_bar.pack(fill=tk.X, pady=10)
+            self.export_progress_bar.start()
+
+            # 在新线程中执行导出
+            threading.Thread(
+                target=self._execute_export_with_service,
+                args=(progress_window, export_single_subtitles, chapter, len(completed_lines)),
+                daemon=True
+            ).start()
+
+        except BusinessException as e:
+            messagebox.showerror("错误", e.message)
+        except Exception as e:
+            messagebox.showerror("错误", f"导出失败: {str(e)}")
+            import traceback
+            traceback.print_exc()
+
+    def _execute_export_with_service(self, progress_window, export_single_subtitles, chapter, total_lines):
+        """使用LineService执行导出操作"""
+        try:
+            # 更新进度状态
+            self.after(0, lambda: self.export_progress_status.config(text="开始导出，请稍候..."))
+
+            print(f"开始导出章节 {self.current_chapter_id}, 单独字幕: {export_single_subtitles}")
+
+            # 调用LineService的export_audio方法
+            success = self.line_controller.line_service.export_audio(
+                chapter_id=self.current_chapter_id,
+                single=export_single_subtitles  # 传入是否单独导出字幕的参数
+            )
+
+            print(f"导出完成，结果: {success}")
+
+            # 完成导出
+            self.after(0, lambda: self._on_export_complete_with_service(
+                progress_window,
+                success,
+                chapter,
+                total_lines,
+                export_single_subtitles
+            ))
+
+        except Exception as ex:
+            # 修复闭包变量作用域问题
+            print(f"导出过程中发生异常: {ex}")
+            import traceback
+            traceback.print_exc()
+            self.after(0, lambda ex=ex: self._on_export_error(progress_window, str(ex)))
+
+    def _on_export_complete_with_service(self, progress_window, success, chapter, total_lines, export_single_subtitles):
+        """导出完成回调"""
+        progress_window.destroy()
+
+        if success:
+            # 构建导出目录路径（按照LineService的目录结构）
+            export_dir = os.path.join(
+                self.project.project_root_path,
+                str(self.project.id),
+                str(self.current_chapter_id),
+                "audio",
+                "result"
+            )
+
+            # 检查实际生成的文件
+            files_created = []
+            if os.path.exists(export_dir):
+                for filename in os.listdir(export_dir):
+                    if filename.endswith(('.wav', '.srt', '.xlsx')):
+                        files_created.append(filename)
+
+            message = (
+                f"导出完成！\n"
+                f"导出目录: {export_dir}\n"
+                f"总台词数: {total_lines}\n"
+                f"导出选项: {'单独导出每句字幕' if export_single_subtitles else '只导出总字幕'}\n\n"
+                f"生成的文件:\n"
+            )
+
+            # 添加文件列表
+            if files_created:
+                for file in sorted(files_created):
+                    message += f"- {file}\n"
+
+                if export_single_subtitles and os.path.exists(os.path.join(export_dir, "subtitles")):
+                    message += f"- subtitles/ (单句字幕文件夹)\n"
+            else:
+                message += "无文件生成\n"
+
+            messagebox.showinfo("导出成功", message)
+
+            # 可选：打开导出文件夹
+            if os.path.exists(export_dir) and messagebox.askyesno("打开文件夹", "是否打开导出文件夹？"):
+                try:
+                    if os.name == 'nt':  # Windows
+                        os.startfile(export_dir)
+                    elif os.name == 'posix':  # macOS, Linux
+                        import subprocess
+                        subprocess.run(['open', export_dir] if sys.platform == 'darwin' else ['xdg-open', export_dir])
+                except Exception as e:
+                    print(f"打开文件夹失败: {e}")
+        else:
+            messagebox.showerror("导出失败", "导出过程中发生错误，请检查日志")
+
+    # 保留原有的错误处理函数
+    def _on_export_error(self, progress_window, error_msg):
+        """导出错误回调"""
+        progress_window.destroy()
+        messagebox.showerror("导出失败", f"导出过程中发生错误:\n{error_msg}")
