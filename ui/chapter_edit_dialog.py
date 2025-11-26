@@ -22,7 +22,7 @@ class ChapterEditDialog:
         """设置对话框"""
         self.dialog = tk.Toplevel(self.parent)
         self.dialog.title("编辑章节" if self.chapter else "新建章节")
-        self.dialog.geometry("500x400")
+        self.dialog.geometry("500x450")  # 增加高度以容纳新选项
         self.dialog.transient(self.parent)
         self.dialog.grab_set()
 
@@ -55,9 +55,31 @@ class ChapterEditDialog:
         self.content_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         content_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
+        # 自动分词选项（只在新建章节时显示）
+        if not self.chapter:
+            self.auto_parse_var = tk.BooleanVar(value=True)  # 默认选中
+            auto_parse_check = ttk.Checkbutton(
+                main_frame,
+                text="自动分词（使用LLM解析台词）",
+                variable=self.auto_parse_var
+            )
+            auto_parse_check.grid(row=2, column=0, columnspan=2, sticky=tk.W, pady=10)
+
+            # 添加说明文本
+            help_label = ttk.Label(
+                main_frame,
+                text="勾选后将在保存章节时自动调用LLM服务解析台词内容",
+                font=("Arial", 8),
+                foreground="gray"
+            )
+            help_label.grid(row=3, column=0, columnspan=2, sticky=tk.W, pady=(0, 10))
+        else:
+            # 编辑现有章节时不显示自动分词选项
+            self.auto_parse_var = tk.BooleanVar(value=False)
+
         # 按钮框架
         btn_frame = ttk.Frame(main_frame)
-        btn_frame.grid(row=2, column=0, columnspan=2, pady=20)
+        btn_frame.grid(row=4, column=0, columnspan=2, pady=20)
 
         ttk.Button(btn_frame, text="保存", command=self.save_chapter).pack(side=tk.LEFT, padx=(0, 10))
         ttk.Button(btn_frame, text="取消", command=self.dialog.destroy).pack(side=tk.LEFT)
@@ -80,6 +102,7 @@ class ChapterEditDialog:
             return
 
         content = self.content_text.get(1.0, tk.END).strip()
+        auto_parse = self.auto_parse_var.get()
 
         try:
             if self.chapter:
@@ -112,6 +135,10 @@ class ChapterEditDialog:
                     text_content=content
                 )
 
+                # 如果勾选了自动分词且章节创建成功，则调用LLM进行分词
+                if auto_parse and self.result and content.strip():
+                    self.auto_parse_content(self.result.id, content)
+
             messagebox.showinfo("成功", "章节保存成功")
             self.dialog.destroy()
 
@@ -119,3 +146,68 @@ class ChapterEditDialog:
             messagebox.showerror("错误", f"保存失败: {e.message}")
         except Exception as e:
             messagebox.showerror("错误", f"保存失败: {str(e)}")
+
+    def auto_parse_content(self, chapter_id, content):
+        """自动调用LLM进行分词"""
+        try:
+            # 显示进度窗口
+            progress_window = tk.Toplevel(self.dialog)
+            progress_window.title("自动分词")
+            progress_window.geometry("400x120")
+            progress_window.transient(self.dialog)
+            progress_window.grab_set()
+            progress_window.resizable(False, False)
+
+            progress_frame = ttk.Frame(progress_window, padding="20")
+            progress_frame.pack(fill=tk.BOTH, expand=True)
+
+            ttk.Label(progress_frame, text="正在使用LLM自动分词，请稍候...",
+                      font=("Arial", 10, "bold")).pack(pady=(0, 10))
+
+            progress_status = ttk.Label(progress_frame, text="准备中...")
+            progress_status.pack(pady=5)
+
+            progress_var = tk.DoubleVar()
+            progress_bar = ttk.Progressbar(progress_frame, variable=progress_var,
+                                           maximum=100, mode='indeterminate')
+            progress_bar.pack(fill=tk.X, pady=10)
+            progress_bar.start()
+
+            def run_parse():
+                try:
+                    # 调用章节控制器的分词方法
+                    parsed_lines = self.chapter_controller.parse_content_to_lines(
+                        self.project_id, chapter_id
+                    )
+
+                    # 完成回调
+                    self.dialog.after(0, lambda: self.on_parse_complete(
+                        progress_window,
+                        len(parsed_lines) if parsed_lines else 0
+                    ))
+
+                except Exception as e:
+                    # 错误回调
+                    error_msg = str(e)
+                    self.dialog.after(0, lambda: self.on_parse_error(progress_window, error_msg))
+
+            # 启动线程
+            import threading
+            thread = threading.Thread(target=run_parse, daemon=True)
+            thread.start()
+
+        except Exception as e:
+            print(f"自动分词启动失败: {e}")
+
+    def on_parse_complete(self, progress_window, lines_count):
+        """分词完成回调"""
+        progress_window.destroy()
+        if lines_count > 0:
+            messagebox.showinfo("分词完成", f"自动分词完成！共解析出 {lines_count} 条台词")
+        else:
+            messagebox.showinfo("分词完成", "自动分词完成，但未解析出台词")
+
+    def on_parse_error(self, progress_window, error_msg):
+        """分词错误回调"""
+        progress_window.destroy()
+        messagebox.showwarning("分词失败", f"自动分词失败: {error_msg}\n\n您可以在章节编辑器中手动导入文本进行分词。")

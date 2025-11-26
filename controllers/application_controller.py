@@ -73,10 +73,15 @@ class ApplicationController:
         prompt_service = PromptService(prompt_repo)
         multi_emotion_voice_service = MultiEmotionVoiceService(multi_emotion_voice_repo)
 
-        # 初始化Controller
+        # 初始化Controller - 修改项目控制器初始化
         self.project_controller = ProjectController(
-            project_service, chapter_service, role_service
+            project_service=project_service,
+            chapter_service=chapter_service,
+            role_service=role_service,
+            llm_provider_service=llm_provider_service,  # 新增
+            tts_provider_service=tts_provider_service  # 新增
         )
+
         self.chapter_controller = ChapterController(
             chapter_service, project_service, line_service, role_service,
             emotion_service, strength_service, prompt_service, voice_service

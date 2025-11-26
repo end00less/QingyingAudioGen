@@ -17,7 +17,7 @@ class LLMProviderService:
         """注入 repository"""
         self.repository = repository
 
-    def create_llm_provider(self,  entity: LLMProviderEntity):
+    def create_llm_provider(self, entity: LLMProviderEntity):
         """创建新LLM供应商
         - 检查同名LLM供应商是否存在
         - 如果存在，抛出异常或返回错误
@@ -40,10 +40,18 @@ class LLMProviderService:
         # 将po转化为entity
         return entity
 
-
     def get_llm_provider(self, llm_provider_id: int) -> Optional[LLMProviderEntity]:
         """根据 ID 查询LLM供应商"""
         po = self.repository.get_by_id(llm_provider_id)
+        if not po:
+            return None
+        data = {k: v for k, v in po.__dict__.items() if not k.startswith("_")}
+        res = LLMProviderEntity(**data)
+        return res
+
+    def get_llm_provider_by_name(self, name: str) -> Optional[LLMProviderEntity]:
+        """根据名称查询LLM供应商"""
+        po = self.repository.get_by_name(name)
         if not po:
             return None
         data = {k: v for k, v in po.__dict__.items() if not k.startswith("_")}
@@ -61,7 +69,7 @@ class LLMProviderService:
         ]
         return entities
 
-    def update_llm_provider(self, llm_provider_id: int, data:dict) -> bool:
+    def update_llm_provider(self, llm_provider_id: int, data: dict) -> bool:
         """更新LLM供应商
         - 可以只更新部分字段
         - 检查同名冲突
@@ -87,22 +95,18 @@ class LLMProviderService:
             return False
         model_lists = entity.model_list.split(",")
         custom_params = entity.custom_params
-        llm = LLMEngine(entity.api_key, entity.api_base_url, model_lists[0],custom_params)
+        llm = LLMEngine(entity.api_key, entity.api_base_url, model_lists[0], custom_params)
         try:
             res = llm.generate_text_test("请输出一份用户信息，严格使用 JSON 格式，不要包含任何额外文字。字段包括：name, age, city")
         except Exception as e:
-            return  False,str(e)
+            return False, str(e)
         print('测试结果为：', res)
         if res is None:
-            return False,"LLM 未返回任何内容"
+            return False, "LLM 未返回任何内容"
 
         # 7. 校验返回是否为合法 JSON
         try:
             json.loads(res)
         except json.JSONDecodeError:
             return False, "LLM 返回的内容不是合法 JSON，请检查模型 / 提示词"
-        return True,"测试成功"
-
-
-
-
+        return True, "测试成功"

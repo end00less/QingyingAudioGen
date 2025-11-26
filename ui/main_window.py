@@ -54,7 +54,9 @@ class MainWindow:
 
         ttk.Button(toolbar_frame, text="新建项目", command=self.new_project).pack(side=tk.LEFT, padx=2)
         ttk.Button(toolbar_frame, text="打开项目", command=self.open_project).pack(side=tk.LEFT, padx=2)
-        ttk.Button(toolbar_frame, text="保存项目", command=self.save_project).pack(side=tk.LEFT, padx=2)
+        # ttk.Button(toolbar_frame, text="保存项目", command=self.save_project).pack(side=tk.LEFT, padx=2)
+        # 添加刷新按钮
+        ttk.Button(toolbar_frame, text="🔄 刷新", command=self.update_project_info).pack(side=tk.LEFT, padx=2)
 
         # 项目信息显示在右侧
         info_frame = ttk.Frame(toolbar_frame)
@@ -166,7 +168,7 @@ class MainWindow:
 
         self.dubbing_notebook.add(self.chapter_frame, text="📝 章节编辑")
         self.dubbing_notebook.add(self.role_frame, text="🎭 角色库")
-        self.dubbing_notebook.add(self.audio_frame, text="🎵 音频生成")
+        # self.dubbing_notebook.add(self.audio_frame, text="🎵 音频生成")
 
         # 绑定标签页切换事件
         self.dubbing_notebook.bind("<<NotebookTabChanged>>", self.on_dubbing_tab_changed)
@@ -184,6 +186,9 @@ class MainWindow:
             self.setup_role_library()
         elif current_tab == 2:  # 音频生成标签页
             self.setup_audio_generation()
+
+        # 每次切换标签页时更新项目信息
+        self.update_project_info()
 
     def setup_chapter_editor(self):
         """设置章节编辑器（延迟加载）"""
@@ -364,7 +369,7 @@ class MainWindow:
             self.root.wait_window(dialog.dialog)
             if dialog.result:
                 self.current_project = dialog.result
-                self.update_project_info()
+                self.update_project_info()  # 确保调用
                 # 自动打开配音模块
                 self.show_dubbing_module()
                 if self.is_debug:
@@ -383,17 +388,12 @@ class MainWindow:
 
             if dialog.selected_project:
                 self.current_project = dialog.selected_project
-                self.update_project_info()
+                self.update_project_info()  # 确保调用
                 # 自动打开配音模块
                 self.show_dubbing_module()
 
-
-                # 如果有模块已经打开，刷新模块内容
-                # if self.current_main_module:
-                #     self.create_module_tabs(self.current_main_module)
-
-            if self.is_debug:
-                print(self.current_project)
+                if self.is_debug:
+                    print(self.current_project)
 
         except Exception as e:
             messagebox.showerror("错误", f"打开项目失败: {str(e)}")

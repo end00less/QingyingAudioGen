@@ -144,10 +144,11 @@ class ChapterEditor(ttk.Frame):
 
         ttk.Button(toolbar_frame, text="添加台词", command=self.add_line, width=10).pack(side=tk.LEFT, padx=(0, 5))
         ttk.Button(toolbar_frame, text="删除台词", command=self.delete_line, width=10).pack(side=tk.LEFT, padx=(0, 5))
-        # ttk.Button(toolbar_frame, text="生成语音", command=self.generate_audio, width=10).pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Button(toolbar_frame, text="批量生成", command=self.batch_generate_audio, width=10).pack(side=tk.LEFT)  # 修复：改为 batch_generate_audio
-        # 添加导出按钮
-        ttk.Button(toolbar_frame, text="导出章节", command=self.export_chapter, width=10).pack(side=tk.LEFT)
+        ttk.Button(toolbar_frame, text="批量生成", command=self.batch_generate_audio, width=10).pack(side=tk.LEFT,
+                                                                                                 padx=(0, 5))
+
+        # 修改：将导出按钮改为下拉菜单按钮
+        self.setup_export_menu(toolbar_frame)
 
         # 台词列表 - 隐藏ID列
         columns = ('id', 'order', 'role', 'voice', 'text_preview', 'status')
@@ -1324,3 +1325,160 @@ class ChapterEditor(ttk.Frame):
         """导出错误回调"""
         progress_window.destroy()
         messagebox.showerror("导出失败", f"导出过程中发生错误:\n{error_msg}")
+
+    def setup_export_menu(self, parent):
+        """设置导出下拉菜单"""
+        # 创建主按钮和菜单
+        export_btn = ttk.Menubutton(parent, text="导出章节", width=10)
+        export_menu = tk.Menu(export_btn, tearoff=0)
+        export_btn.configure(menu=export_menu)
+
+        # 添加菜单项
+        export_menu.add_command(label="导出到本地", command=self.export_chapter_local)
+        export_menu.add_command(label="导出到创作中", command=self.export_chapter_creation)
+
+        export_btn.pack(side=tk.LEFT)
+
+    def export_chapter_local(self):
+        """导出到本地 - 使用原有逻辑"""
+        if not self.current_chapter_id:
+            messagebox.showwarning("警告", "请先选择章节")
+            return
+
+        # 这里调用原有的导出逻辑
+        self.export_chapter()
+
+    def export_chapter_creation(self):
+        """导出到创作中 - 预留接口"""
+        if not self.current_chapter_id:
+            messagebox.showwarning("警告", "请先选择章节")
+            return
+
+        try:
+            # 获取当前章节信息
+            chapter = self.chapter_controller.get_chapter(self.current_chapter_id)
+            if not chapter:
+                messagebox.showerror("错误", "章节不存在")
+                return
+
+            # 获取章节下所有台词
+            lines = self.line_controller.get_lines_by_chapter(self.current_chapter_id)
+
+            # 过滤出已生成配音的台词
+            completed_lines = [line for line in lines if
+                               line.status == 'done' and line.audio_path and os.path.exists(line.audio_path)]
+
+            if not completed_lines:
+                messagebox.showwarning("警告", "该章节没有已生成配音的台词")
+                return
+
+            # 显示进度窗口
+            progress_window = tk.Toplevel(self)
+            progress_window.title("导出到创作中")
+            progress_window.geometry("500x150")
+            progress_window.transient(self)
+            progress_window.grab_set()
+            progress_window.resizable(False, False)
+
+            progress_frame = ttk.Frame(progress_window, padding="20")
+            progress_frame.pack(fill=tk.BOTH, expand=True)
+
+            ttk.Label(progress_frame, text="正在准备导出数据...",
+                      font=("Arial", 10, "bold")).pack(pady=(0, 10))
+
+            progress_status = ttk.Label(progress_frame, text="收集章节信息...")
+            progress_status.pack(pady=5)
+
+            progress_var = tk.DoubleVar()
+            progress_bar = ttk.Progressbar(progress_frame, variable=progress_var,
+                                           maximum=100, mode='indeterminate')
+            progress_bar.pack(fill=tk.X, pady=10)
+            progress_bar.start()
+
+            # 在新线程中执行导出准备
+            threading.Thread(
+                target=self._prepare_export_for_creation,
+                args=(progress_window, chapter, completed_lines),
+                daemon=True
+            ).start()
+
+        except Exception as e:
+            messagebox.showerror("错误", f"导出准备失败: {str(e)}")
+
+    def _prepare_export_for_creation(self, progress_window, chapter, lines):
+        """为创作中导出准备数据"""
+        try:
+            # 模拟数据处理过程
+            time.sleep(1)  # 模拟处理时间
+
+            # 构建导出数据结构
+            export_data = {
+                "chapter_id": chapter.id,
+                "chapter_title": chapter.title,
+                "project_id": self.project.id,
+                "export_time": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "total_lines": len(lines),
+                "lines_data": []
+            }
+
+            # 收集每句台词的数据
+            for i, line in enumerate(lines):
+                # 获取角色信息
+                role_name = self.get_role_name(line.role_id)
+                voice_name = self.get_role_voice_name(line.role_id)
+
+                line_data = {
+                    "line_id": line.id,
+                    "order": line.line_order or i + 1,
+                    "role_name": role_name,
+                    "voice_name": voice_name,
+                    "text_content": line.text_content,
+                    "emotion": self.get_emotion_name(line.emotion_id),
+                    "strength": self.get_strength_name(line.strength_id),
+                    "audio_path": line.audio_path,
+                    "audio_duration": self._get_audio_duration(line.audio_path) if line.audio_path else 0
+                }
+                export_data["lines_data"].append(line_data)
+
+            # 完成准备
+            self.after(0, lambda: self._on_creation_export_ready(progress_window, export_data))
+
+        except Exception as e:
+            self.after(0, lambda: self._on_creation_export_error(progress_window, str(e)))
+
+    def _get_audio_duration(self, audio_path):
+        """获取音频时长（秒）"""
+        try:
+            if audio_path and os.path.exists(audio_path):
+                # 这里可以使用音频播放服务获取时长
+                duration = audio_player.get_duration(audio_path)
+                return duration if duration > 0 else 0
+        except:
+            pass
+        return 0
+
+    def _on_creation_export_ready(self, progress_window, export_data):
+        """创作中导出数据准备完成"""
+        progress_window.destroy()
+
+        # 这里可以调用外部接口或触发事件
+        # 目前先显示一个信息对话框，实际使用时可以替换为具体的导出逻辑
+        message = (
+            f"章节数据准备完成！\n"
+            f"章节: {export_data['chapter_title']}\n"
+            f"台词数: {export_data['total_lines']}\n"
+            f"导出时间: {export_data['export_time']}\n\n"
+            f"此功能为预留接口，实际使用时将数据发送到创作程序。"
+        )
+
+        messagebox.showinfo("导出准备完成", message)
+
+        # 实际使用时，这里可以调用：
+        # self.app_controller.export_to_creation_tool(export_data)
+        # 或者触发事件：
+        # self.event_generate("<<ExportToCreation>>", data=export_data)
+
+    def _on_creation_export_error(self, progress_window, error_msg):
+        """创作中导出错误处理"""
+        progress_window.destroy()
+        messagebox.showerror("导出失败", f"准备导出数据时发生错误:\n{error_msg}")
