@@ -109,8 +109,14 @@ class AudioPlayerService:
             return False
 
     def _play_with_pygame(self, file_path: str) -> bool:
-        """使用pygame播放音频"""
+        print("""使用pygame播放音频""")
+
         try:
+            # 停止当前播放
+            if pygame.mixer.music.get_busy():
+                pygame.mixer.music.stop()
+                time.sleep(0.1)
+
             # 尝试直接加载
             try:
                 pygame.mixer.music.load(file_path)
@@ -140,6 +146,7 @@ class AudioPlayerService:
                 with self._lock:
                     self.is_playing = False
                     self.position = 0
+                    self.current_audio = None  # 确保清空当前音频引用
 
             self.play_thread = threading.Thread(target=monitor_playback, daemon=True)
             self.play_thread.start()
@@ -147,6 +154,9 @@ class AudioPlayerService:
 
         except Exception as e:
             print(f"pygame播放失败: {e}")
+            with self._lock:
+                self.is_playing = False
+                self.current_audio = None
             return False
 
     def _play_with_pydub(self, file_path: str) -> bool:
@@ -350,9 +360,14 @@ class AudioPlayerService:
         with self._lock:
             self.stop_playback = True
 
-            if USING_PYGAME and pygame.mixer.music.get_busy():
-                pygame.mixer.music.stop()
-            elif USING_PYDUB and self.current_audio:
+            try:
+                if USING_PYGAME and pygame.mixer.music.get_busy():
+                    pygame.mixer.music.stop()
+                    time.sleep(0.1)  # 给停止操作一点时间
+            except:
+                pass
+
+            if USING_PYDUB and self.current_audio:
                 try:
                     self.current_audio.stop()
                 except:

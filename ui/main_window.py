@@ -364,7 +364,7 @@ class MainWindow:
     def new_project(self):
         """新建项目"""
         try:
-            from app.ui.project_window import ProjectDialog
+            from app.ui.project_dialog import ProjectDialog
             dialog = ProjectDialog(self.root, self.app_controller.project_controller)
             self.root.wait_window(dialog.dialog)
             if dialog.result:
